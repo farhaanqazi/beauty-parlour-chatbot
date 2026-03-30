@@ -1,0 +1,25 @@
+# Cleanup backup directory (7-day retention)
+.cleanup_backup/
+
+# Runtime artifacts
+*.log
+success_url.txt
+
+# Python
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.env
+
+# Node
+frontend/node_modules/
+frontend/dist/
+frontend/*.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo

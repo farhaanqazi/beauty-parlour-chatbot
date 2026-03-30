@@ -1,0 +1,16 @@
+{
+  "mcpServers": {
+    "21st-dev": {
+      "httpUrl": "https://mcp.21st.dev/mcp",
+      "headers": {
+        "Authorization": "Bearer an_sk_7f2bd5aefa00ccc241e2374b11747a442a5dd7f6bd0882d8ebc39dea7e6f5db5"
+      },
+      "timeout": 30000,
+      "trust": false
+    }
+  },
+  "mcp": {
+    "allowed": [],
+    "excluded": []
+  }
+}

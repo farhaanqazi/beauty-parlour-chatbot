@@ -1,0 +1,76 @@
+from __future__ import annotations
+
+from typing import Any
+
+from app.core.enums import ChannelType
+from app.schemas.messages import NormalizedInboundMessage
+
+
+class WebhookService:
+    @staticmethod
+    def normalize_telegram_update(salon_slug: str, payload: dict[str, Any]) -> list[NormalizedInboundMessage]:
+        message = payload.get("message") or payload.get("edited_message")
+        if not message:
+            return []
+
+        text = message.get("text") or message.get("caption")
+        if not text:
+            return []
+
+        chat = message.get("chat", {})
+        display_name = " ".join(filter(None, [chat.get("first_name"), chat.get("last_name")])).strip() or None
+        external_user_id = str(chat.get("id"))
+        return [
+            NormalizedInboundMessage(
+                salon_slug=salon_slug,
+                channel=ChannelType.TELEGRAM,
+                external_user_id=external_user_id,
+                text=text,
+                raw_payload=payload,
+                provider_message_id=str(message.get("message_id")),
+                display_name=display_name,
+                telegram_chat_id=external_user_id,
+            )
+        ]
+
+    @staticmethod
+    def normalize_whatsapp_update(salon_slug: str, payload: dict[str, Any]) -> list[NormalizedInboundMessage]:
+        normalized_messages: list[NormalizedInboundMessage] = []
+        entries = payload.get("entry", [])
+        for entry in entries:
+            for change in entry.get("changes", []):
+                value = change.get("value", {})
+                contacts = {contact.get("wa_id"): contact for contact in value.get("contacts", [])}
+                for message in value.get("messages", []):
+                    text = WebhookService._extract_whatsapp_text(message)
+                    if not text:
+                        continue
+                    external_user_id = message.get("from")
+                    contact = contacts.get(external_user_id, {})
+                    normalized_messages.append(
+                        NormalizedInboundMessage(
+                            salon_slug=salon_slug,
+                            channel=ChannelType.WHATSAPP,
+                            external_user_id=external_user_id,
+                            text=text,
+                            raw_payload=payload,
+                            provider_message_id=message.get("id"),
+                            display_name=contact.get("profile", {}).get("name"),
+                            phone_number=external_user_id,
+                        )
+                    )
+        return normalized_messages
+
+    @staticmethod
+    def _extract_whatsapp_text(message: dict[str, Any]) -> str | None:
+        message_type = message.get("type")
+        if message_type == "text":
+            return message.get("text", {}).get("body")
+        if message_type == "button":
+            return message.get("button", {}).get("text")
+        if message_type == "interactive":
+            interactive = message.get("interactive", {})
+            button_reply = interactive.get("button_reply", {})
+            list_reply = interactive.get("list_reply", {})
+            return button_reply.get("title") or list_reply.get("title")
+        return None

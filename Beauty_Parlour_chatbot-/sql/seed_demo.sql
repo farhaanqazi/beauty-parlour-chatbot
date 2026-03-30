@@ -1,0 +1,403 @@
+-- ============================================================
+-- Beauty Parlour Chatbot — Demo Seed Data v2.0
+-- Run AFTER migration_v2.sql completes successfully
+-- ============================================================
+
+BEGIN;
+
+-- ============================================================
+-- 1. CREATE DEMO SALON
+-- ============================================================
+INSERT INTO salons (
+    name, 
+    slug, 
+    timezone, 
+    flow_config, 
+    opening_time,
+    closing_time,
+    digest_preference,
+    digest_time,
+    currency
+)
+VALUES (
+    'Demo Beauty Palace',
+    'demo-beauty-palace',
+    'Asia/Kolkata',
+    '{"ask_sample_images": true, "greeting": "Welcome to Demo Beauty Palace!"}'::jsonb,
+    '09:00:00'::time,  -- Opening time
+    '20:00:00'::time,  -- Closing time
+    'daily'::digest_preference,
+    '09:00:00'::time,  -- Digest time
+    'INR'
+)
+ON CONFLICT (slug) DO UPDATE SET
+    name = EXCLUDED.name,
+    timezone = EXCLUDED.timezone,
+    opening_time = EXCLUDED.opening_time,
+    closing_time = EXCLUDED.closing_time,
+    updated_at = now();
+
+-- ============================================================
+-- 2. CREATE CHANNEL CONFIGURATIONS
+-- ============================================================
+INSERT INTO salon_channels (salon_id, channel, provider_config, is_active)
+SELECT id, 'telegram', '{"bot_name": "DemoBeautyBot"}'::jsonb, true
+FROM salons
+WHERE slug = 'demo-beauty-palace'
+ON CONFLICT (salon_id, channel) DO UPDATE SET
+    provider_config = EXCLUDED.provider_config,
+    is_active = EXCLUDED.is_active,
+    updated_at = now();
+
+INSERT INTO salon_channels (salon_id, channel, provider_config, is_active)
+SELECT id, 'whatsapp', '{"business_phone": "919999999999"}'::jsonb, true
+FROM salons
+WHERE slug = 'demo-beauty-palace'
+ON CONFLICT (salon_id, channel) DO UPDATE SET
+    provider_config = EXCLUDED.provider_config,
+    is_active = EXCLUDED.is_active,
+    updated_at = now();
+
+-- ============================================================
+-- 3. CREATE NOTIFICATION CONTACTS
+-- ============================================================
+INSERT INTO salon_notification_contacts (salon_id, name, channel, destination, is_active)
+SELECT id, 'Owner Telegram', 'telegram', '123456789', true
+FROM salons
+WHERE slug = 'demo-beauty-palace'
+ON CONFLICT (salon_id, channel, destination) DO UPDATE SET
+    name = EXCLUDED.name,
+    is_active = EXCLUDED.is_active,
+    updated_at = now();
+
+INSERT INTO salon_notification_contacts (salon_id, name, channel, destination, is_active)
+SELECT id, 'Manager WhatsApp', 'whatsapp', '919876543210', true
+FROM salons
+WHERE slug = 'demo-beauty-palace'
+ON CONFLICT (salon_id, channel, destination) DO UPDATE SET
+    name = EXCLUDED.name,
+    is_active = EXCLUDED.is_active,
+    updated_at = now();
+
+-- ============================================================
+-- 4. CREATE SERVICES WITH PRICING
+-- ============================================================
+INSERT INTO salon_services (
+    salon_id, 
+    code, 
+    name, 
+    description, 
+    duration_minutes,
+    price,
+    discount_price,
+    sample_image_urls
+)
+SELECT
+    id,
+    'bridal_makeup',
+    'Bridal Makeup',
+    'Complete bridal makeup package including trial session',
+    180,  -- 3 hours
+    15000.00,  -- Price in INR
+    12000.00,  -- Discount price
+    '["https://example.com/bridal-1.jpg", "https://example.com/bridal-2.jpg"]'::jsonb
+FROM salons
+WHERE slug = 'demo-beauty-palace'
+ON CONFLICT (salon_id, code) DO UPDATE SET
+    name = EXCLUDED.name,
+    description = EXCLUDED.description,
+    duration_minutes = EXCLUDED.duration_minutes,
+    price = EXCLUDED.price,
+    discount_price = EXCLUDED.discount_price,
+    sample_image_urls = EXCLUDED.sample_image_urls,
+    updated_at = now();
+
+INSERT INTO salon_services (
+    salon_id, 
+    code, 
+    name, 
+    description, 
+    duration_minutes,
+    price,
+    discount_price,
+    sample_image_urls
+)
+SELECT
+    id,
+    'engagement_makeup',
+    'Engagement Makeup',
+    'Elegant makeup for engagement ceremonies',
+    120,  -- 2 hours
+    8000.00,
+    6500.00,
+    '["https://example.com/engagement-1.jpg", "https://example.com/engagement-2.jpg"]'::jsonb
+FROM salons
+WHERE slug = 'demo-beauty-palace'
+ON CONFLICT (salon_id, code) DO UPDATE SET
+    name = EXCLUDED.name,
+    description = EXCLUDED.description,
+    duration_minutes = EXCLUDED.duration_minutes,
+    price = EXCLUDED.price,
+    discount_price = EXCLUDED.discount_price,
+    sample_image_urls = EXCLUDED.sample_image_urls,
+    updated_at = now();
+
+INSERT INTO salon_services (
+    salon_id, 
+    code, 
+    name, 
+    description, 
+    duration_minutes,
+    price,
+    discount_price,
+    sample_image_urls
+)
+SELECT
+    id,
+    'party_makeup',
+    'Party Makeup',
+    'Glamorous makeup for parties and events',
+    90,  -- 1.5 hours
+    5000.00,
+    4000.00,
+    '["https://example.com/party-1.jpg"]'::jsonb
+FROM salons
+WHERE slug = 'demo-beauty-palace'
+ON CONFLICT (salon_id, code) DO UPDATE SET
+    name = EXCLUDED.name,
+    description = EXCLUDED.description,
+    duration_minutes = EXCLUDED.duration_minutes,
+    price = EXCLUDED.price,
+    discount_price = EXCLUDED.discount_price,
+    sample_image_urls = EXCLUDED.sample_image_urls,
+    updated_at = now();
+
+INSERT INTO salon_services (
+    salon_id, 
+    code, 
+    name, 
+    description, 
+    duration_minutes,
+    price,
+    discount_price,
+    sample_image_urls
+)
+SELECT
+    id,
+    'hair_styling',
+    'Hair Styling',
+    'Professional hair styling and blowout',
+    60,  -- 1 hour
+    3000.00,
+    2500.00,
+    '["https://example.com/hair-1.jpg", "https://example.com/hair-2.jpg"]'::jsonb
+FROM salons
+WHERE slug = 'demo-beauty-palace'
+ON CONFLICT (salon_id, code) DO UPDATE SET
+    name = EXCLUDED.name,
+    description = EXCLUDED.description,
+    duration_minutes = EXCLUDED.duration_minutes,
+    price = EXCLUDED.price,
+    discount_price = EXCLUDED.discount_price,
+    sample_image_urls = EXCLUDED.sample_image_urls,
+    updated_at = now();
+
+INSERT INTO salon_services (
+    salon_id, 
+    code, 
+    name, 
+    description, 
+    duration_minutes,
+    price,
+    discount_price,
+    sample_image_urls
+)
+SELECT
+    id,
+    'facial_treatment',
+    'Facial Treatment',
+    'Premium facial with cleansing and moisturizing',
+    90,  -- 1.5 hours
+    4500.00,
+    3500.00,
+    '[]'::jsonb
+FROM salons
+WHERE slug = 'demo-beauty-palace'
+ON CONFLICT (salon_id, code) DO UPDATE SET
+    name = EXCLUDED.name,
+    description = EXCLUDED.description,
+    duration_minutes = EXCLUDED.duration_minutes,
+    price = EXCLUDED.price,
+    discount_price = EXCLUDED.discount_price,
+    sample_image_urls = EXCLUDED.sample_image_urls,
+    updated_at = now();
+
+-- ============================================================
+-- 5. CREATE DEMO CUSTOMER
+-- ============================================================
+INSERT INTO customers (
+    salon_id,
+    channel,
+    external_user_id,
+    phone_number,
+    telegram_chat_id,
+    name,
+    language_preference
+)
+SELECT
+    id,
+    'whatsapp'::channel_type,
+    '919123456789',
+    '919123456789',
+    NULL,
+    'Priya Sharma',
+    'english'
+FROM salons
+WHERE slug = 'demo-beauty-palace'
+ON CONFLICT (salon_id, channel, external_user_id) DO UPDATE SET
+    name = EXCLUDED.name,
+    language_preference = EXCLUDED.language_preference,
+    updated_at = now();
+
+-- ============================================================
+-- 6. CREATE DEMO APPOINTMENT (Future Date)
+-- ============================================================
+INSERT INTO appointments (
+    salon_id,
+    customer_id,
+    service_id,
+    appointment_at,
+    status,
+    notes
+)
+SELECT
+    s.id,
+    c.id,
+    srv.id,
+    now() + interval '3 days' + interval '10 hours',  -- 3 days from now at 10 AM
+    'confirmed'::appointment_status,
+    'Demo appointment for testing'
+FROM salons s
+CROSS JOIN customers c
+CROSS JOIN salon_services srv
+WHERE s.slug = 'demo-beauty-palace'
+  AND c.external_user_id = '919123456789'
+  AND srv.code = 'bridal_makeup'
+ON CONFLICT DO NOTHING;
+
+-- ============================================================
+-- 7. CREATE DEMO NOTIFICATION JOBS
+-- ============================================================
+INSERT INTO notification_jobs (
+    appointment_id,
+    salon_id,
+    job_type,
+    status,
+    due_at
+)
+SELECT
+    a.id,
+    a.salon_id,
+    'reminder_24h'::notification_job_type,
+    'pending'::notification_job_status,
+    a.appointment_at - interval '24 hours'
+FROM appointments a
+WHERE a.salon_id = (SELECT id FROM salons WHERE slug = 'demo-beauty-palace')
+  AND a.appointment_at > now()
+ON CONFLICT (appointment_id, job_type) DO UPDATE SET
+    due_at = EXCLUDED.due_at,
+    updated_at = now();
+
+INSERT INTO notification_jobs (
+    appointment_id,
+    salon_id,
+    job_type,
+    status,
+    due_at
+)
+SELECT
+    a.id,
+    a.salon_id,
+    'reminder_1h'::notification_job_type,
+    'pending'::notification_job_status,
+    a.appointment_at - interval '1 hour'
+FROM appointments a
+WHERE a.salon_id = (SELECT id FROM salons WHERE slug = 'demo-beauty-palace')
+  AND a.appointment_at > now()
+ON CONFLICT (appointment_id, job_type) DO UPDATE SET
+    due_at = EXCLUDED.due_at,
+    updated_at = now();
+
+-- ============================================================
+-- 8. CREATE DEMO SALON CLOSURE (For Testing)
+-- ============================================================
+INSERT INTO salon_closures (
+    salon_id,
+    closed_from,
+    closed_until,
+    reason,
+    notifications_queued
+)
+SELECT
+    id,
+    now() + interval '7 days',  -- Start closure in 7 days
+    now() + interval '10 days',  -- End closure in 10 days
+    'Annual maintenance closure',
+    false
+FROM salons
+WHERE slug = 'demo-beauty-palace'
+ON CONFLICT DO NOTHING;
+
+-- ============================================================
+-- 9. CREATE FIRST ADMIN USER INSTRUCTION
+-- ============================================================
+-- IMPORTANT: Run this AFTER creating user in Supabase Auth
+-- 
+-- Step 1: Go to Supabase Dashboard → Authentication → Users
+-- Step 2: Create new user with email/password
+-- Step 3: Copy the User ID (UUID)
+-- Step 4: Uncomment and run the following:
+--
+-- INSERT INTO users (id, email, full_name, role, salon_id, is_active, created_by)
+-- VALUES (
+--     '<uuid-from-auth-users>',  -- Replace with actual UUID
+--     'admin@demobeauty.com',
+--     'Demo Admin',
+--     'admin',
+--     (SELECT id FROM salons WHERE slug = 'demo-beauty-palace'),
+--     TRUE,
+--     NULL
+-- );
+-- ============================================================
+
+COMMIT;
+
+-- ============================================================
+-- VERIFICATION QUERIES
+-- ============================================================
+-- Run these to verify seed data was created:
+
+SELECT 'Salons' as table_name, count(*) as count FROM salons;
+SELECT 'Services' as table_name, count(*) as count FROM salon_services WHERE salon_id = (SELECT id FROM salons WHERE slug = 'demo-beauty-palace');
+SELECT 'Customers' as table_name, count(*) as count FROM customers;
+SELECT 'Appointments' as table_name, count(*) as count FROM appointments;
+SELECT 'Notification Jobs' as table_name, count(*) as count FROM notification_jobs;
+SELECT 'Salon Closures' as table_name, count(*) as count FROM salon_closures;
+
+-- List demo services with pricing
+SELECT 
+    name,
+    duration_minutes,
+    price,
+    discount_price,
+    CASE WHEN discount_price IS NOT NULL 
+         THEN round(((price - discount_price) / price * 100)::numeric, 0) 
+         ELSE 0 
+    END as discount_percent
+FROM salon_services
+WHERE salon_id = (SELECT id FROM salons WHERE slug = 'demo-beauty-palace')
+ORDER BY name;
+
+-- ============================================================
+-- END OF SEED DATA
+-- ============================================================

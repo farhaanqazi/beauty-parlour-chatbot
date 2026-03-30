@@ -1,0 +1,67 @@
+from __future__ import annotations
+
+from datetime import datetime
+from typing import Optional
+from uuid import UUID
+
+from sqlalchemy import Boolean, DateTime, ForeignKey, String, Text, UniqueConstraint, CheckConstraint
+from sqlalchemy.dialects.postgresql import UUID as PGUUID
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+
+from app.core.enums import UserRole
+from app.db.models.common import Base, TimestampMixin, UUIDPrimaryKeyMixin, utc_now
+
+
+# Use existing PostgreSQL enum type
+db_user_role = None  # Will be set at runtime from ENUM
+
+
+class User(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    """
+    Dashboard user model for authentication and authorization.
+    
+    Links to Supabase Auth users by ID. The id field should match
+    the auth.uid() from Supabase Auth.
+    """
+    __tablename__ = "users"
+    __table_args__ = (
+        CheckConstraint(
+            "role = 'admin' OR salon_id IS NOT NULL",
+            name="users_role_salon_check",
+        ),
+    )
+
+    email: Mapped[str] = mapped_column(String(255), unique=True, nullable=False, index=True)
+    full_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    role: Mapped[UserRole] = mapped_column(nullable=False, index=True)
+    salon_id: Mapped[Optional[UUID]] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("salons.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    created_by: Mapped[Optional[UUID]] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+
+    # Relationships
+    salon = relationship("Salon", back_populates="users")
+    created_users = relationship("User", remote_side="User.id", backref="creator")
+
+    def __repr__(self) -> str:
+        return f"<User(id={self.id}, email={self.email}, role={self.role.value})>"
+
+    @property
+    def is_admin(self) -> bool:
+        return self.role == UserRole.ADMIN
+
+    @property
+    def is_salon_owner(self) -> bool:
+        return self.role == UserRole.SALON_OWNER
+
+    @property
+    def is_reception(self) -> bool:
+        return self.role == UserRole.RECEPTION

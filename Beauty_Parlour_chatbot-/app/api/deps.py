@@ -1,0 +1,285 @@
+from __future__ import annotations
+
+from collections.abc import AsyncIterator
+from typing import Optional
+
+from fastapi import Depends, HTTPException, Request, status
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from jose import jwt, JWTError, ExpiredSignatureError
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.core.config import Settings, get_settings
+from app.db.models.user import User
+from app.db.session import SessionLocal
+from app.llm.service import LLMService
+from app.messaging.dispatcher import MessageDispatcher
+from app.redis.state_store import RedisStateStore
+from app.services.conversation_service import ConversationService
+from app.services.notification_service import NotificationService
+
+
+# Security scheme for Bearer token
+security = HTTPBearer(auto_error=False)
+
+
+class AuthenticatedUser:
+    """Represents an authenticated user from JWT token."""
+
+    def __init__(
+        self,
+        id: str,
+        email: str,
+        role: str,
+        salon_id: Optional[str] = None,
+        is_active: bool = True,
+    ):
+        self.id = id
+        self.email = email
+        self.role = role
+        self.salon_id = salon_id
+        self.is_active = is_active
+
+    def __repr__(self) -> str:
+        return f"AuthenticatedUser(id={self.id}, email={self.email}, role={self.role})"
+
+
+async def get_db() -> AsyncIterator[AsyncSession]:
+    async with SessionLocal() as session:
+        yield session
+
+
+def get_app_settings() -> Settings:
+    return get_settings()
+
+
+def get_state_store(request: Request) -> RedisStateStore:
+    return request.app.state.state_store
+
+
+def get_llm_service(request: Request) -> LLMService:
+    return request.app.state.llm_service
+
+
+def get_dispatcher(request: Request) -> MessageDispatcher:
+    return request.app.state.dispatcher
+
+
+def get_conversation_service(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_app_settings),
+) -> ConversationService:
+    return ConversationService(
+        db=db,
+        settings=settings,
+        state_store=get_state_store(request),
+        llm_service=get_llm_service(request),
+        dispatcher=get_dispatcher(request),
+    )
+
+
+def get_notification_service(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_app_settings),
+) -> NotificationService:
+    return NotificationService(
+        db=db,
+        dispatcher=get_dispatcher(request),
+        llm_service=get_llm_service(request),
+        batch_size=settings.notification_batch_size,
+    )
+
+
+# ============================================================================
+# JWT Authentication Dependencies
+# ============================================================================
+
+
+async def get_current_user(
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
+    db: AsyncSession = Depends(get_db),
+) -> AuthenticatedUser:
+    """
+    JWT Authentication Dependency.
+    
+    Validates Bearer token and returns authenticated user.
+    
+    Raises:
+        HTTPException 401: Missing authentication credentials
+        HTTPException 401: Invalid or expired token
+        HTTPException 403: User not found or inactive
+    """
+    if not credentials:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Missing authentication credentials",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    token = credentials.credentials
+    settings = get_settings()
+
+    try:
+        # Decode and validate JWT token
+        payload = jwt.decode(
+            token,
+            settings.supabase_jwt_secret,
+            algorithms=["HS256"],
+            issuer="supabase",
+        )
+
+        # Extract user ID from token subject
+        user_id = payload.get("sub")
+        if not user_id:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid token: missing user ID",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+
+        # Fetch user from database
+        result = await db.execute(select(User).where(User.id == user_id))
+        user = result.scalar_one_or_none()
+
+        if not user:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="User not found",
+            )
+
+        if not user.is_active:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="User account is inactive",
+            )
+
+        return AuthenticatedUser(
+            id=user.id,
+            email=user.email,
+            role=user.role,
+            salon_id=str(user.salon_id) if user.salon_id else None,
+            is_active=user.is_active,
+        )
+
+    except ExpiredSignatureError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Token has expired",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    except JWTError as e:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid token",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+
+def require_roles(*roles: str):
+    """
+    Role-based Authorization Dependency Factory.
+
+    Usage:
+        @router.get("/admin-only")
+        async def admin_endpoint(user: AuthenticatedUser = Depends(require_roles("admin"))):
+            ...
+
+        @router.get("/staff-only")
+        async def staff_endpoint(user: AuthenticatedUser = Depends(require_roles("admin", "salon_owner"))):
+            ...
+
+    Raises:
+        HTTPException 403: User role not in allowed roles
+    """
+    async def role_checker(user: AuthenticatedUser = Depends(get_current_user)) -> AuthenticatedUser:
+        if user.role not in roles:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Insufficient permissions. Required roles: {', '.join(roles)}",
+            )
+        return user
+    return role_checker
+
+
+async def get_optional_user(
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
+    db: AsyncSession = Depends(get_db),
+) -> Optional[AuthenticatedUser]:
+    """
+    Get current user if authenticated, otherwise return None.
+
+    Use this for endpoints that work for both authenticated and anonymous users.
+    """
+    try:
+        return await get_current_user(credentials, db)
+    except HTTPException:
+        return None
+
+
+async def require_role(
+    required_role: str,
+    user: AuthenticatedUser = Depends(get_current_user),
+) -> AuthenticatedUser:
+    """
+    Dependency factory to require a specific user role.
+
+    Usage:
+        @router.get("/admin-only")
+        async def admin_endpoint(user: AuthenticatedUser = Depends(require_role("admin"))):
+            ...
+
+    Raises:
+        HTTPException 403: User role does not match required role
+    """
+    if user.role != required_role:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Insufficient permissions. Required role: {required_role}",
+        )
+    return user
+
+
+async def require_any_role(
+    *roles: str,
+    user: AuthenticatedUser = Depends(get_current_user),
+) -> AuthenticatedUser:
+    """
+    Dependency factory to require any of the specified roles.
+
+    Usage:
+        @router.get("/staff-only")
+        async def staff_endpoint(user: AuthenticatedUser = Depends(require_any_role("admin", "salon_owner"))):
+            ...
+
+    Raises:
+        HTTPException 403: User role not in allowed roles
+    """
+    if user.role not in roles:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Insufficient permissions. Required roles: {', '.join(roles)}",
+        )
+    return user
+
+
+# Exports
+__all__ = [
+    # Database & Services
+    "get_db",
+    "get_app_settings",
+    "get_state_store",
+    "get_llm_service",
+    "get_dispatcher",
+    "get_conversation_service",
+    "get_notification_service",
+    # JWT Authentication
+    "AuthenticatedUser",
+    "security",
+    "get_current_user",
+    "get_optional_user",
+    "require_role",
+    "require_any_role",
+    "require_roles",
+]

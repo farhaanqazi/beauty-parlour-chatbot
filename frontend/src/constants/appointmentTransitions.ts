@@ -21,6 +21,7 @@ export const STATUS_LABELS: Record<AppointmentStatus, string> = {
   cancelled_by_salon: 'Cancelled by Salon',
   cancelled_by_reception: 'Cancelled by Reception',
   cancelled_closure: 'Cancelled — Closure',
+  cancelled_by_user: 'Cancelled by User',
   completed: 'Completed',
   no_show: 'No Show',
 };

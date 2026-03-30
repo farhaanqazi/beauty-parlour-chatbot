@@ -12,6 +12,7 @@ const statusConfig: Record<AppointmentStatus, { label: string; color: 'default' 
   cancelled_by_salon: { label: 'Cancelled by Salon', color: 'error' },
   cancelled_by_reception: { label: 'Cancelled by Reception', color: 'error' },
   cancelled_closure: { label: 'Cancelled Closure', color: 'error' },
+  cancelled_by_user: { label: 'Cancelled by User', color: 'error' },
   no_show: { label: 'No Show', color: 'warning' },
 };
 

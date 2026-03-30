@@ -2,8 +2,8 @@ import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { X, Loader2, Calendar, Clock, User, Phone, CheckCircle2 } from 'lucide-react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { fetchSalonServices, createAppointment } from '../../services/dashboardApi';
-import type { CreateAppointmentPayload } from '../../services/dashboardApi';
+import { fetchSalonServices } from '../../services/dashboardApi';
+import { useCreateAppointment } from '../../hooks/useAppointments';
 
 interface NewAppointmentModalProps {
   isOpen: boolean;
@@ -11,8 +11,18 @@ interface NewAppointmentModalProps {
   salonId: string | undefined;
 }
 
+interface CreateAppointmentPayload {
+  salon_id: string;
+  customer_name: string;
+  customer_phone: string;
+  service_id: string;
+  appointment_at: string;
+  notes?: string;
+}
+
 const NewAppointmentModal: React.FC<NewAppointmentModalProps> = ({ isOpen, onClose, salonId }) => {
   const queryClient = useQueryClient();
+  const createAppointment = useCreateAppointment();
 
   const [customerName, setCustomerName] = useState('');
   const [customerPhone, setCustomerPhone] = useState('');

@@ -78,6 +78,18 @@ export const fetchUpcomingAppointments = async (salonSlug: string, hours: number
   }));
 };
 
+
+/**
+ * Update an appointment's status
+ * MATCHES: (assumed) @router.patch("/appointments/{appointment_id}/status")
+ */
+export const updateAppointmentStatus = async ({ appointmentId, status }: { appointmentId: string; status: string; }): Promise<any> => {
+  const { data } = await apiClient.patch(`/api/v1/appointments/${appointmentId}/status`, {
+    status,
+  });
+  return data;
+};
+
 /**
  * Cancel an appointment
  * MATCHES: @router.post("/appointments/{appointment_id}/cancel")

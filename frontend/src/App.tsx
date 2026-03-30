@@ -5,6 +5,14 @@ import ProtectedRoute from './components/common/ProtectedRoute';
 import ErrorBoundary from './components/common/ErrorBoundary';
 import LoginRedesigned from './pages/LoginRedesigned';
 import DashboardRedesigned from './pages/DashboardRedesigned';
+import AppointmentsList from './pages/AppointmentsList';
+import ServicesManagement from './pages/ServicesManagement';
+import UserManagement from './pages/UserManagement';
+import CustomerDetail from './pages/CustomerDetail';
+import AdminDashboard from './pages/AdminDashboard';
+import ReceptionDashboard from './pages/ReceptionDashboard';
+import Analytics from './pages/Analytics';
+import Reports from './pages/Reports';
 
 const createQueryClient = () => new QueryClient({
   defaultOptions: {
@@ -31,15 +39,91 @@ const App = () => {
               <Route path="/login" element={<LoginRedesigned />} />
 
               {/* Redesigned Dashboard with Real Supabase Data */}
-              <Route 
-                path="/dashboard" 
+              <Route
+                path="/dashboard"
                 element={
                   <ProtectedRoute allowedRoles={['admin', 'salon_owner', 'reception']}>
                     <DashboardRedesigned />
                   </ProtectedRoute>
-                } 
+                }
               />
-              
+
+              {/* TIER 1: Critical Features */}
+              <Route
+                path="/owner/appointments"
+                element={
+                  <ProtectedRoute allowedRoles={['admin', 'salon_owner', 'reception']}>
+                    <AppointmentsList />
+                  </ProtectedRoute>
+                }
+              />
+
+              <Route
+                path="/owner/services"
+                element={
+                  <ProtectedRoute allowedRoles={['admin', 'salon_owner']}>
+                    <ServicesManagement />
+                  </ProtectedRoute>
+                }
+              />
+
+              <Route
+                path="/admin/users"
+                element={
+                  <ProtectedRoute allowedRoles={['admin']}>
+                    <UserManagement />
+                  </ProtectedRoute>
+                }
+              />
+
+              {/* TIER 2: Admin & Reception Dashboards */}
+              <Route
+                path="/admin/dashboard"
+                element={
+                  <ProtectedRoute allowedRoles={['admin']}>
+                    <AdminDashboard />
+                  </ProtectedRoute>
+                }
+              />
+
+              <Route
+                path="/reception/dashboard"
+                element={
+                  <ProtectedRoute allowedRoles={['reception']}>
+                    <ReceptionDashboard />
+                  </ProtectedRoute>
+                }
+              />
+
+              {/* TIER 3: Customer Details */}
+              <Route
+                path="/customers/:customerId"
+                element={
+                  <ProtectedRoute allowedRoles={['admin', 'salon_owner', 'reception']}>
+                    <CustomerDetail />
+                  </ProtectedRoute>
+                }
+              />
+
+              {/* TIER 4: Analytics & Reports */}
+              <Route
+                path="/analytics"
+                element={
+                  <ProtectedRoute allowedRoles={['admin', 'salon_owner']}>
+                    <Analytics />
+                  </ProtectedRoute>
+                }
+              />
+
+              <Route
+                path="/reports"
+                element={
+                  <ProtectedRoute allowedRoles={['admin', 'salon_owner']}>
+                    <Reports />
+                  </ProtectedRoute>
+                }
+              />
+
               <Route path="/" element={<Navigate to="/dashboard" replace />} />
               <Route path="*" element={<Navigate to="/login" replace />} />
             </Routes>

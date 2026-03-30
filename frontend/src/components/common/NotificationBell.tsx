@@ -79,8 +79,6 @@ const NotificationBell = () => {
     setNotifications((prev) => prev.map((n) => ({ ...n, read: true })));
   };
 
-  const handleClose = () => setIsOpen(false);
-
   return (
     <div className="relative" ref={dropdownRef}>
       <button

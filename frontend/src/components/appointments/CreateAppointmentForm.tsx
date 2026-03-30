@@ -2,20 +2,11 @@ import { useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
-import {
-  Dialog,
-  DialogTitle,
-  DialogContent,
-  DialogActions,
-  Button,
-  TextField,
-  CircularProgress,
-  Alert,
-  MenuItem,
-} from '@mui/material';
-import { DateTimePicker } from '@mui/x-date-pickers/DateTimePicker';
-import { LocalizationProvider } from '@mui/x-date-pickers/LocalizationProvider';
-import { AdapterDateFns } from '@mui/x-date-pickers/AdapterDateFns';
+import { AlertCircle, Loader } from 'lucide-react';
+import DatePicker from 'react-datepicker';
+import 'react-datepicker/dist/react-datepicker.css';
+import TailwindInput from '../common/TailwindInput';
+import TailwindSelect from '../common/TailwindSelect';
 import { useCreateAppointment } from '../../hooks/useAppointments';
 import { useAuthStore } from '../../store/authStore';
 
@@ -55,11 +46,15 @@ const CreateAppointmentForm = ({ open, onClose }: CreateAppointmentFormProps) =>
   } = useForm<FormData>({ resolver: zodResolver(schema) });
 
   const onSubmit = async (data: FormData) => {
+    if (!appointmentDate) {
+      setError('Please select an appointment date and time');
+      return;
+    }
     setError(null);
     try {
       await createMutation.mutateAsync({
         ...data,
-        appointment_at: appointmentDate?.toISOString() || '',
+        appointment_at: appointmentDate.toISOString(),
       });
       onClose();
     } catch (err: any) {
@@ -67,111 +62,117 @@ const CreateAppointmentForm = ({ open, onClose }: CreateAppointmentFormProps) =>
     }
   };
 
+  if (!open) return null;
+
   return (
-    <Dialog open={open} onClose={onClose} maxWidth="sm" fullWidth>
-      <DialogTitle>New Appointment</DialogTitle>
-      <form onSubmit={handleSubmit(onSubmit)}>
-        <DialogContent>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+      <div className="w-full max-w-md rounded-2xl bg-white shadow-xl">
+        {/* Header */}
+        <div className="border-b border-neutral-200 px-6 py-4">
+          <h2 className="text-lg font-semibold text-neutral-900">New Appointment</h2>
+        </div>
+
+        {/* Content */}
+        <form onSubmit={handleSubmit(onSubmit)} className="space-y-4 px-6 py-4">
           {error && (
-            <Alert severity="error" sx={{ mb: 2 }}>
-              {error}
-            </Alert>
+            <div className="flex items-center gap-3 p-4 bg-red-50 border border-red-200 rounded-lg">
+              <AlertCircle className="w-5 h-5 text-red-600 flex-shrink-0" />
+              <span className="text-sm text-red-700">{error}</span>
+            </div>
           )}
-          
+
           {/* Salon ID - Admin only */}
           {user?.role === 'admin' && (
-            <TextField
+            <TailwindInput
               label="Salon ID"
-              fullWidth
-              margin="normal"
-              {...register('salon_id')}
-              error={!!errors.salon_id}
-              helperText={errors.salon_id?.message}
-              disabled={isSubmitting}
               placeholder="Enter salon UUID"
+              disabled={isSubmitting}
+              {...register('salon_id')}
+              error={errors.salon_id?.message}
             />
           )}
-          
+
           {/* Customer ID */}
-          <TextField
+          <TailwindInput
             label="Customer ID"
-            fullWidth
-            margin="normal"
-            {...register('customer_id')}
-            error={!!errors.customer_id}
-            helperText={errors.customer_id?.message}
-            disabled={isSubmitting}
             placeholder="Enter customer UUID"
-          />
-          
-          {/* Service Selection */}
-          <TextField
-            select
-            label="Service"
-            fullWidth
-            margin="normal"
-            {...register('service_id')}
-            error={!!errors.service_id}
-            helperText={errors.service_id?.message}
             disabled={isSubmitting}
-          >
-            {placeholderServices.map((service) => (
-              <MenuItem key={service.id} value={service.id}>
-                {service.name}
-              </MenuItem>
-            ))}
-          </TextField>
-          
+            {...register('customer_id')}
+            error={errors.customer_id?.message}
+          />
+
+          {/* Service Selection */}
+          <TailwindSelect
+            label="Service"
+            options={placeholderServices.map((service) => ({
+              value: service.id,
+              label: service.name,
+            }))}
+            disabled={isSubmitting}
+            placeholder="Select a service"
+            {...register('service_id')}
+            error={errors.service_id?.message}
+          />
+
           {/* Appointment Date/Time */}
-          <LocalizationProvider dateAdapter={AdapterDateFns}>
-            <DateTimePicker
-              label="Appointment Date & Time"
-              value={appointmentDate}
-              onChange={(newValue) => {
-                setAppointmentDate(newValue);
-                if (newValue) {
-                  setValue('appointment_at', newValue.toISOString());
+          <div>
+            <label className="block text-sm font-medium text-neutral-700 mb-2">
+              Appointment Date & Time *
+            </label>
+            <DatePicker
+              selected={appointmentDate}
+              onChange={(date: Date | null) => {
+                setAppointmentDate(date);
+                if (date) {
+                  setValue('appointment_at', date.toISOString());
                 }
               }}
-              slotProps={{
-                textField: {
-                  fullWidth: true,
-                  margin: 'normal',
-                  error: !!errors.appointment_at,
-                  helperText: errors.appointment_at?.message,
-                },
-              }}
+              showTimeSelect
+              timeIntervals={30}
+              dateFormat="MMM d, yyyy h:mm aa"
               disabled={isSubmitting}
+              className="w-full px-4 py-2.5 border border-neutral-300 rounded-lg focus:outline-none focus:border-blue-500"
+              placeholderText="Select date and time"
             />
-          </LocalizationProvider>
-          
+            {errors.appointment_at && (
+              <p className="text-xs text-red-600 mt-1">{errors.appointment_at.message}</p>
+            )}
+          </div>
+
           {/* Notes */}
-          <TextField
+          <TailwindInput
             label="Notes (optional)"
+            placeholder="Add any notes"
+            disabled={isSubmitting}
             multiline
             rows={3}
-            fullWidth
-            margin="normal"
             {...register('notes')}
-            error={!!errors.notes}
-            helperText={errors.notes?.message}
-            disabled={isSubmitting}
+            error={errors.notes?.message}
           />
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={onClose} disabled={isSubmitting}>
-            Cancel
-          </Button>
-          <Button
-            type="submit"
-            variant="contained"
+        </form>
+
+        {/* Footer */}
+        <div className="border-t border-neutral-200 px-6 py-4 flex items-center justify-end gap-3">
+          <button
+            type="button"
+            onClick={onClose}
             disabled={isSubmitting}
+            className="px-4 py-2 text-neutral-700 hover:bg-neutral-100 rounded-lg disabled:opacity-50 transition-colors"
           >
-            {isSubmitting ? <CircularProgress size={24} /> : 'Create Appointment'}
-          </Button>
-        </DialogActions>
-      </form>
-    </Dialog>
+            Cancel
+          </button>
+          <button
+            type="submit"
+            disabled={isSubmitting || !appointmentDate}
+            onClick={handleSubmit(onSubmit)}
+            className="flex items-center gap-2 px-6 py-2 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-lg disabled:opacity-50 transition-colors"
+          >
+            {isSubmitting ? <Loader className="w-4 h-4 animate-spin" /> : null}
+            {isSubmitting ? 'Creating...' : 'Create Appointment'}
+          </button>
+        </div>
+      </div>
+    </div>
   );
 };
 

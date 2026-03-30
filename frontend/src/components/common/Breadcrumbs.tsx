@@ -1,8 +1,5 @@
 import { Link as RouterLink, useLocation } from 'react-router-dom';
-import {
-  Breadcrumbs as MuiBreadcrumbs, Link, Typography, Box
-} from '@mui/material';
-import NavigateNextIcon from '@mui/icons-material/NavigateNext';
+import { ChevronRight } from 'lucide-react';
 
 const SEGMENT_LABELS: Record<string, string> = {
   admin: 'Admin',
@@ -35,36 +32,33 @@ const AppBreadcrumbs = () => {
   if (crumbs.length <= 1) return null;
 
   return (
-    <Box sx={{ mb: 2 }}>
-      <MuiBreadcrumbs
-        separator={<NavigateNextIcon fontSize="small" />}
-        aria-label="breadcrumb"
-      >
-        {crumbs.map((crumb) =>
-          crumb.isLast ? (
-            <Typography
-              key={crumb.path}
-              variant="body2"
-              color="text.primary"
-              fontWeight={600}
+    <nav className="flex items-center gap-2 text-sm" aria-label="Breadcrumb">
+      {crumbs.map((crumb, index) => (
+        <div key={crumb.path} className="flex items-center gap-2">
+          {/* Separator Chevron */}
+          {index > 0 && (
+            <ChevronRight className="w-4 h-4 text-neutral-400 flex-shrink-0" aria-hidden="true" />
+          )}
+          
+          {/* Crumb Link or Text */}
+          {crumb.isLast ? (
+            <span
+              className="text-neutral-600 font-semibold"
+              aria-current="page"
             >
               {crumb.label}
-            </Typography>
+            </span>
           ) : (
-            <Link
-              key={crumb.path}
-              component={RouterLink}
+            <RouterLink
               to={crumb.path}
-              variant="body2"
-              color="text.secondary"
-              underline="hover"
+              className="text-blue-600 hover:underline hover:text-blue-700 transition-colors"
             >
               {crumb.label}
-            </Link>
-          )
-        )}
-      </MuiBreadcrumbs>
-    </Box>
+            </RouterLink>
+          )}
+        </div>
+      ))}
+    </nav>
   );
 };
 

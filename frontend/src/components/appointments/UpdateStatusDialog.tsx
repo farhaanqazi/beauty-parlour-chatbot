@@ -1,17 +1,10 @@
 import { useState } from 'react';
-import {
-  Dialog,
-  DialogTitle,
-  DialogContent,
-  DialogActions,
-  Button,
-  TextField,
-  CircularProgress,
-  Alert,
-  MenuItem,
-} from '@mui/material';
+import TailwindModal from '../common/TailwindModal';
+import TailwindSelect from '../common/TailwindSelect';
 import { useUpdateAppointmentStatus } from '../../hooks/useAppointments';
 import type { AppointmentStatus } from '../../types';
+import { AlertCircle, Loader } from 'lucide-react';
+import { AnimatePresence } from 'motion/react';
 
 interface UpdateStatusDialogProps {
   open: boolean;
@@ -28,6 +21,7 @@ const statusTransitions: Record<AppointmentStatus, AppointmentStatus[]> = {
   cancelled_by_salon: [],
   cancelled_by_reception: [],
   cancelled_closure: [],
+  cancelled_by_user: [],
   completed: [],
   no_show: [],
 };
@@ -40,6 +34,7 @@ const statusLabels: Record<AppointmentStatus, string> = {
   cancelled_by_salon: 'Cancelled by Salon',
   cancelled_by_reception: 'Cancelled by Reception',
   cancelled_closure: 'Cancelled Closure',
+  cancelled_by_user: 'Cancelled by User',
   no_show: 'No Show',
 };
 
@@ -62,50 +57,79 @@ const UpdateStatusDialog = ({ open, appointmentId, currentStatus, onClose }: Upd
 
   const cannotChange = allowedTransitions.length === 0;
 
-  return (
-    <Dialog open={open} onClose={onClose} maxWidth="sm" fullWidth>
-      <DialogTitle>Update Appointment Status</DialogTitle>
-      <DialogContent>
-        {error && (
-          <Alert severity="error" sx={{ mb: 2 }}>
-            {error}
-          </Alert>
-        )}
-        
-        {cannotChange ? (
-          <Alert severity="info">
-            Status cannot be changed from {statusLabels[currentStatus]}.
-          </Alert>
+  // Prepare options for TailwindSelect
+  const statusOptions = allowedTransitions.map((status) => ({
+    value: status,
+    label: statusLabels[status],
+  }));
+
+  const actions = (
+    <div className="flex gap-3 justify-end">
+      <button
+        type="button"
+        onClick={onClose}
+        disabled={updateMutation.isPending || cannotChange}
+        className="px-4 py-2 text-neutral-600 hover:bg-neutral-100 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+      >
+        Cancel
+      </button>
+      <button
+        type="button"
+        onClick={handleSubmit}
+        disabled={updateMutation.isPending || cannotChange}
+        className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+      >
+        {updateMutation.isPending ? (
+          <>
+            <Loader className="w-4 h-4 animate-spin" />
+            <span>Updating...</span>
+          </>
         ) : (
-          <TextField
-            select
+          'Update Status'
+        )}
+      </button>
+    </div>
+  );
+
+  return (
+    <TailwindModal
+      isOpen={open}
+      onClose={onClose}
+      title="Update Appointment Status"
+      actions={actions}
+      size="sm"
+    >
+      <div className="space-y-4">
+        {/* Error Alert */}
+        <AnimatePresence>
+          {error && (
+            <div className="flex items-center gap-2 p-3 bg-red-50 border border-red-200 rounded-lg">
+              <AlertCircle className="w-4 h-4 text-red-600 flex-shrink-0" />
+              <span className="text-sm text-red-700">{error}</span>
+            </div>
+          )}
+        </AnimatePresence>
+
+        {/* Status Info or Select */}
+        {cannotChange ? (
+          <div className="flex items-center gap-2 p-3 bg-blue-50 border border-blue-200 rounded-lg">
+            <AlertCircle className="w-4 h-4 text-blue-600 flex-shrink-0" />
+            <span className="text-sm text-blue-700">
+              Status cannot be changed from{' '}
+              <span className="font-semibold">{statusLabels[currentStatus]}</span>.
+            </span>
+          </div>
+        ) : (
+          <TailwindSelect
             label="New Status"
             value={newStatus}
             onChange={(e) => setNewStatus(e.target.value as AppointmentStatus)}
-            fullWidth
+            options={statusOptions}
             disabled={updateMutation.isPending}
-          >
-            {allowedTransitions.map((status) => (
-              <MenuItem key={status} value={status}>
-                {statusLabels[status]}
-              </MenuItem>
-            ))}
-          </TextField>
+          />
         )}
-      </DialogContent>
-      <DialogActions>
-        <Button onClick={onClose} disabled={updateMutation.isPending || cannotChange}>
-          Cancel
-        </Button>
-        <Button
-          onClick={handleSubmit}
-          variant="contained"
-          disabled={updateMutation.isPending || cannotChange}
-        >
-          {updateMutation.isPending ? <CircularProgress size={24} /> : 'Update Status'}
-        </Button>
-      </DialogActions>
-    </Dialog>
+      </div>
+    </TailwindModal>
   );
 };
 

@@ -1,6 +1,18 @@
 # Cleanup backup directory (7-day retention)
 .cleanup_backup/
 
+# AI Context and Development Artifacts
+.ai-context/
+.qwen/
+.qwen-code/
+
+# Documentation - Development & Refactoring (move to .ai-context/)
+REFACTOR-*.md
+TIER*.md
+*-SUMMARY.md
+*-VERIFICATION.md
+MUI-REFACTOR-*.md
+
 # Runtime artifacts
 *.log
 success_url.txt

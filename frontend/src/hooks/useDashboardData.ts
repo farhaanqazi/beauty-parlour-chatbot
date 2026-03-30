@@ -5,14 +5,34 @@
  * Follows the same pattern as existing useKpis.ts
  */
 
-import { useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   fetchDashboardStats,
-  fetchTodayAppointments,
+  fetchUpcomingAppointments,
   fetchStaffBySalon,
   fetchAppointmentsForRevenue,
+  updateAppointmentStatus,
 } from '../services/dashboardApi';
 import { useAuthStore } from '../store/authStore';
+
+// ============================================================================
+// Hook: useAdminDashboardStats
+// ============================================================================
+
+/**
+ * Fetch system-wide admin dashboard KPIs
+ * 
+ * @example
+ * const { data: stats, isLoading, error } = useAdminDashboardStats();
+ */
+export const useAdminDashboardStats = () => {
+  return useQuery({
+    queryKey: ['dashboard', 'admin', 'stats'],
+    queryFn: fetchDashboardStats,
+    staleTime: 30000, // 30 seconds
+    retry: 2,
+  });
+};
 
 // ============================================================================
 // Hook: useDashboardStats
@@ -80,6 +100,34 @@ export const useStaffList = () => {
     staleTime: 60000, // 1 minute - staff list doesn't change often
     retry: 2,
     enabled: !!salonId,
+  });
+};
+
+// ============================================================================
+// Mutation: useUpdateAppointmentStatus
+// ============================================================================
+
+/**
+ * Creates a mutation for updating an appointment's status.
+ * Invalidates the daily appointments query on success to refresh the list.
+ * 
+ * @example
+ * const { mutate: updateStatus } = useUpdateAppointmentStatus();
+ * updateStatus({ appointmentId: '123', status: 'confirmed' });
+ */
+export const useUpdateAppointmentStatus = () => {
+  const queryClient = useQueryClient();
+  const { user } = useAuthStore();
+
+  return useMutation({
+    mutationFn: updateAppointmentStatus,
+    onSuccess: () => {
+      // Invalidate and refetch today's appointments
+      queryClient.invalidateQueries({ 
+        queryKey: ['dashboard', 'appointments', 'today', user?.salon_id] 
+      });
+    },
+    // Optional: Add onError and onSettled for more robust handling
   });
 };
 

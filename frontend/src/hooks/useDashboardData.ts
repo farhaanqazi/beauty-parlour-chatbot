@@ -46,6 +46,7 @@ export const useAdminDashboardStats = () => {
  */
 export const useDashboardStats = () => {
   const { user } = useAuthStore();
+  const token = useAuthStore((state) => state.token);
   const salonId = user?.salon_id;
 
   return useQuery({
@@ -53,7 +54,7 @@ export const useDashboardStats = () => {
     queryFn: fetchDashboardStats,
     staleTime: 30000, // 30 seconds
     retry: 2,
-    enabled: !!salonId, // Only fetch if user has a salon_id
+    enabled: !!salonId && !!token, // Avoid unauthenticated calls to protected backend endpoints
   });
 };
 
@@ -69,14 +70,15 @@ export const useDashboardStats = () => {
  */
 export const useTodayAppointments = () => {
   const { user } = useAuthStore();
+  const token = useAuthStore((state) => state.token);
   const salonId = user?.salon_id;
 
   return useQuery({
     queryKey: ['dashboard', 'appointments', 'today', salonId],
-    queryFn: () => salonId ? fetchTodayAppointments(salonId) : Promise.resolve([]),
+    queryFn: () => salonId ? fetchUpcomingAppointments(salonId, 24) : Promise.resolve([]),
     staleTime: 10000, // 10 seconds - appointments change frequently
     retry: 2,
-    enabled: !!salonId,
+    enabled: !!salonId && !!token,
   });
 };
 
@@ -92,6 +94,7 @@ export const useTodayAppointments = () => {
  */
 export const useStaffList = () => {
   const { user } = useAuthStore();
+  const token = useAuthStore((state) => state.token);
   const salonId = user?.salon_id;
 
   return useQuery({
@@ -99,7 +102,7 @@ export const useStaffList = () => {
     queryFn: () => salonId ? fetchStaffBySalon(salonId) : Promise.resolve([]),
     staleTime: 60000, // 1 minute - staff list doesn't change often
     retry: 2,
-    enabled: !!salonId,
+    enabled: !!salonId && !!token,
   });
 };
 
@@ -143,6 +146,7 @@ export const useUpdateAppointmentStatus = () => {
  */
 export const useWeeklyRevenue = () => {
   const { user } = useAuthStore();
+  const token = useAuthStore((state) => state.token);
   const salonId = user?.salon_id;
 
   return useQuery({
@@ -191,6 +195,6 @@ export const useWeeklyRevenue = () => {
     },
     staleTime: 60000, // 1 minute
     retry: 2,
-    enabled: !!salonId,
+    enabled: !!salonId && !!token,
   });
 };

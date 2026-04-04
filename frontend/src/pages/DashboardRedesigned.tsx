@@ -312,7 +312,7 @@ const DashboardRedesigned = () => {
   const { data: staff, isLoading: staffLoading } = useStaffList();
 
   // Filter appointments based on search
-  const filteredAppointments = appointments?.filter(apt => {
+  const filteredAppointments = appointments?.filter((apt: any) => {
     if (!searchQuery) return true;
     const query = searchQuery.toLowerCase();
     return (
@@ -492,7 +492,7 @@ const DashboardRedesigned = () => {
                   <ErrorState message="Failed to load appointments" onRetry={() => refetchApt()} />
                 ) : filteredAppointments && filteredAppointments.length > 0 ? (
                   <AnimatePresence>
-                    {filteredAppointments.map((appointment) => (
+                    {filteredAppointments.map((appointment: any) => (
                       <AppointmentRow key={appointment.id} appointment={appointment} />
                     ))}
                   </AnimatePresence>

@@ -202,10 +202,10 @@ const ReceptionDashboard = () => {
             {appointments && (
                 appointments.length > 0 ? (
                     <div className="space-y-4" role="list" aria-label="Today's appointments">
-                        {appointments.map((appointment) => (
-                            <AppointmentRow 
-                                key={appointment.id} 
-                                appointment={appointment} 
+                        {appointments.map((appointment: any) => (
+                            <AppointmentRow
+                                key={appointment.id}
+                                appointment={appointment}
                                 onCheckIn={() => handleCheckIn(appointment.id)}
                                 isUpdating={isUpdatingStatus}
                             />

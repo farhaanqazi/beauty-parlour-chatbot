@@ -1,6 +1,7 @@
 import axios, { AxiosError } from 'axios';
 import type { InternalAxiosRequestConfig } from 'axios';
 import { supabase } from './supabaseClient';
+import { useAuthStore } from '../store/authStore';
 
 const apiClient = axios.create({
   baseURL: import.meta.env.VITE_API_URL as string,
@@ -27,8 +28,13 @@ const processQueue = (error: AxiosError | null, token: string | null = null) => 
 };
 
 apiClient.interceptors.request.use(async (config) => {
+  const storedToken = useAuthStore.getState().token;
+
   if (!supabase) {
-    // Demo mode - no auth required
+    // Demo mode fallback: still attach persisted token if present.
+    if (storedToken) {
+      config.headers.Authorization = `Bearer ${storedToken}`;
+    }
     return config;
   }
 
@@ -36,9 +42,15 @@ apiClient.interceptors.request.use(async (config) => {
     const { data: { session } } = await supabase.auth.getSession();
     if (session) {
       config.headers.Authorization = `Bearer ${session.access_token}`;
+    } else if (storedToken) {
+      // Fallback for startup races where session hydration lags behind persisted auth state.
+      config.headers.Authorization = `Bearer ${storedToken}`;
     }
   } catch (error) {
     console.error('Failed to get session:', error);
+    if (storedToken) {
+      config.headers.Authorization = `Bearer ${storedToken}`;
+    }
   }
 
   return config;
@@ -48,9 +60,10 @@ apiClient.interceptors.response.use(
   (response) => response,
   async (error: AxiosError) => {
     const originalRequest = error.config as InternalAxiosRequestConfig & { _retry?: boolean };
+    const isUnauthorized = error.response?.status === 401;
 
     // If error is 401 and we haven't retried yet
-    if (error.response?.status === 401 && !originalRequest._retry && supabase) {
+    if (isUnauthorized && !originalRequest._retry && supabase) {
       if (isRefreshing) {
         // Queue this request to retry after refresh completes
         return new Promise((resolve, reject) => {
@@ -86,9 +99,11 @@ apiClient.interceptors.response.use(
       }
     }
 
-    // For non-401 errors or if refresh fails, sign out
-    if (error.response?.status === 401 && supabase) {
-      supabase.auth.signOut();
+    // Always route unauthenticated users back to login to avoid dead-end error screens.
+    if (isUnauthorized) {
+      if (supabase) {
+        supabase.auth.signOut();
+      }
       window.location.href = '/login';
     }
 

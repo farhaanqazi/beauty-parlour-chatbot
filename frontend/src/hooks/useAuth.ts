@@ -5,8 +5,11 @@ import { useAuthStore } from '../store/authStore';
 import type { AuthUser } from '../types';
 
 export const useAuth = () => {
-  const { user, isAuthenticated, isLoading, setUser, clearUser, setLoading } = useAuthStore();
+  const { user, isLoading, setUser, clearUser, setLoading } = useAuthStore();
   const navigate = useNavigate();
+  
+  // Compute isAuthenticated from user state
+  const isAuthenticated = !!user;
 
   // Initialize auth state from persisted store on mount
   useEffect(() => {
@@ -123,23 +126,8 @@ export const useAuth = () => {
 
   const login = useCallback(async (email: string, password: string) => {
     if (!supabase) {
-      // Demo mode - allow any email/password for visual testing
-      console.log('Demo mode: Supabase not configured. Using demo credentials.');
-      if (email && password) {
-        const demoUser: AuthUser = {
-          id: 'demo-user-id',
-          email,
-          full_name: 'Demo User',
-          role: email.includes('admin') ? 'admin' : (email.includes('reception') ? 'reception' : 'salon_owner'),
-          salon_id: '123e4567-e89b-12d3-a456-426614174000',
-          is_active: true,
-        };
-        setUser(demoUser, 'demo-token');
-        setLoading(false);
-        // Navigate to dashboard
-        navigate('/dashboard');
-        return;
-      }
+      console.error('[useAuth.login] Supabase client is not configured');
+      throw new Error('Supabase is not configured. Please check your environment variables.');
     }
 
     setLoading(true);
@@ -181,13 +169,19 @@ export const useAuth = () => {
 
       // Explicitly set the user to state BEFORE navigating to avoid ProtectedRoute bouncing back
       console.log('[useAuth.login] Setting user state synchronously...');
+      
+      // Set both Zustand store AND local state to ensure consistency
       useAuthStore.getState().setUser(userData as AuthUser, data.session.access_token);
+      
+      // Also update local state via setUser to ensure isAuthenticated is true immediately
+      setUser(userData as AuthUser, data.session.access_token);
 
       console.log('[useAuth.login] Navigation triggered. Role:', userData.role);
       // Navigate to unified dashboard
       if (userData.role) {
         setLoading(false);
-        navigate('/dashboard');
+        // Small delay to ensure state propagation
+        setTimeout(() => navigate('/dashboard'), 0);
       } else {
         setLoading(false);
         navigate('/login');

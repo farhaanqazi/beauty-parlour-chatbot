@@ -29,6 +29,9 @@ export interface DashboardAppointment {
   appointment_at: string;
   status: string;
   phone_number: string | null;
+  service?: {
+    price: number;
+  };
 }
 
 export interface StaffMember {

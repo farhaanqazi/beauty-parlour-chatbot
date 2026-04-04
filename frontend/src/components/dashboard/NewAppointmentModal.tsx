@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { X, Loader2, Calendar, Clock, User, Phone, CheckCircle2 } from 'lucide-react';
+import { X, Loader2, Calendar, Clock, User, CheckCircle2 } from 'lucide-react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { fetchSalonServices } from '../../services/dashboardApi';
 import { useCreateAppointment } from '../../hooks/useAppointments';
@@ -13,8 +13,7 @@ interface NewAppointmentModalProps {
 
 interface CreateAppointmentPayload {
   salon_id: string;
-  customer_name: string;
-  customer_phone: string;
+  customer_id: string;
   service_id: string;
   appointment_at: string;
   notes?: string;
@@ -25,7 +24,7 @@ const NewAppointmentModal: React.FC<NewAppointmentModalProps> = ({ isOpen, onClo
   const createAppointment = useCreateAppointment();
 
   const [customerName, setCustomerName] = useState('');
-  const [customerPhone, setCustomerPhone] = useState('');
+  const [customerId, setCustomerId] = useState('');
   const [serviceId, setServiceId] = useState('');
   const [date, setDate] = useState('');
   const [time, setTime] = useState('');
@@ -42,7 +41,7 @@ const NewAppointmentModal: React.FC<NewAppointmentModalProps> = ({ isOpen, onClo
   });
 
   const mutation = useMutation({
-    mutationFn: (payload: CreateAppointmentPayload) => createAppointment(payload),
+    mutationFn: (payload: CreateAppointmentPayload) => createAppointment.mutateAsync(payload),
     onSuccess: () => {
       // Magically refresh everything on the dashboard
       queryClient.invalidateQueries({ queryKey: ['dashboard'] });
@@ -57,7 +56,7 @@ const NewAppointmentModal: React.FC<NewAppointmentModalProps> = ({ isOpen, onClo
     onClose();
     setTimeout(() => {
       setCustomerName('');
-      setCustomerPhone('');
+      setCustomerId('');
       setServiceId('');
       setDate('');
       setTime('');
@@ -83,8 +82,7 @@ const NewAppointmentModal: React.FC<NewAppointmentModalProps> = ({ isOpen, onClo
 
     mutation.mutate({
       salon_id: salonId,
-      customer_name: customerName,
-      customer_phone: customerPhone,
+      customer_id: customerId,
       service_id: serviceId,
       appointment_at: appointmentAt,
       notes: notes || undefined,
@@ -154,16 +152,16 @@ const NewAppointmentModal: React.FC<NewAppointmentModalProps> = ({ isOpen, onClo
                       </div>
                     </div>
                     <div className="space-y-1.5">
-                      <label className="text-sm font-medium text-neutral-700">Phone Number</label>
+                      <label className="text-sm font-medium text-neutral-700">Customer ID</label>
                       <div className="relative">
-                        <Phone className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-neutral-400" />
+                        <User className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-neutral-400" />
                         <input
-                          type="tel"
+                          type="text"
                           required
-                          value={customerPhone}
-                          onChange={(e) => setCustomerPhone(e.target.value)}
+                          value={customerId}
+                          onChange={(e) => setCustomerId(e.target.value)}
                           className="w-full pl-9 pr-4 py-2 bg-neutral-50 border border-neutral-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all"
-                          placeholder="+1 234 567 8900"
+                          placeholder="Customer UUID"
                         />
                       </div>
                     </div>

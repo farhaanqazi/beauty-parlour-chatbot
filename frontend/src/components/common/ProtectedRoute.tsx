@@ -15,10 +15,10 @@ const ProtectedRoute = ({ children, allowedRoles }: Props) => {
 
   if (isLoading) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-neutral-50 via-blue-50/30 to-neutral-50">
+      <div className="min-h-screen flex items-center justify-center bg-[var(--color-surface-base)]">
         <div className="text-center">
-          <div className="w-12 h-12 border-4 border-blue-600 border-t-transparent rounded-full animate-spin mx-auto mb-4" />
-          <p className="text-neutral-600 text-sm">Loading your dashboard...</p>
+          <div className="w-12 h-12 border-4 border-[var(--color-accent)] border-t-transparent rounded-full animate-spin mx-auto mb-4" />
+          <p className="text-[var(--color-neutral-400)] text-sm">Loading your dashboard...</p>
         </div>
       </div>
     );

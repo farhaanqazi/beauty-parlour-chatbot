@@ -1,18 +1,30 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { useRef } from 'react';
+import { useRef, Suspense, lazy } from 'react';
 import ProtectedRoute from './components/common/ProtectedRoute';
 import ErrorBoundary from './components/common/ErrorBoundary';
 import LoginRedesigned from './pages/LoginRedesigned';
 import DashboardRedesigned from './pages/DashboardRedesigned';
-import AppointmentsList from './pages/AppointmentsList';
-import ServicesManagement from './pages/ServicesManagement';
-import UserManagement from './pages/UserManagement';
-import CustomerDetail from './pages/CustomerDetail';
-import AdminDashboard from './pages/AdminDashboard';
-import ReceptionDashboard from './pages/ReceptionDashboard';
-import Analytics from './pages/Analytics';
-import Reports from './pages/Reports';
+
+// Lazy-loaded routes — code split by page
+const AppointmentsList = lazy(() => import('./pages/AppointmentsList'));
+const ServicesManagement = lazy(() => import('./pages/ServicesManagement'));
+const UserManagement = lazy(() => import('./pages/UserManagement'));
+const CustomerDetail = lazy(() => import('./pages/CustomerDetail'));
+const AdminDashboard = lazy(() => import('./pages/AdminDashboard'));
+const ReceptionDashboard = lazy(() => import('./pages/ReceptionDashboard'));
+const Analytics = lazy(() => import('./pages/Analytics'));
+const Reports = lazy(() => import('./pages/Reports'));
+
+// Shared loading fallback for lazy routes
+const PageLoader = () => (
+  <div className="min-h-screen flex items-center justify-center bg-[var(--color-surface-base)]">
+    <div className="text-center">
+      <div className="w-10 h-10 border-4 border-[var(--color-accent)] border-t-transparent rounded-full animate-spin mx-auto mb-4" />
+      <p className="text-[var(--color-neutral-400)] text-sm">Loading page...</p>
+    </div>
+  </div>
+);
 
 const createQueryClient = () => new QueryClient({
   defaultOptions: {
@@ -34,6 +46,7 @@ const App = () => {
     <ErrorBoundary>
       <QueryClientProvider client={queryClientRef.current}>
         <BrowserRouter>
+          <Suspense fallback={<PageLoader />}>
             <Routes>
               {/* Modern Auth View (Pure Tailwind + Custom UI) */}
               <Route path="/login" element={<LoginRedesigned />} />
@@ -127,6 +140,7 @@ const App = () => {
               <Route path="/" element={<Navigate to="/dashboard" replace />} />
               <Route path="*" element={<Navigate to="/login" replace />} />
             </Routes>
+          </Suspense>
         </BrowserRouter>
       </QueryClientProvider>
     </ErrorBoundary>

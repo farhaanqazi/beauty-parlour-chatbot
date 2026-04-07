@@ -20,12 +20,20 @@ export const useAuth = () => {
         return;
       }
 
+      // Timeout: if auth init takes >10s, force resolve to prevent infinite spinner
+      const timeoutId = setTimeout(() => {
+        console.error('[useAuth] Auth initialization timed out after 10s');
+        clearUser();
+        setLoading(false);
+      }, 10_000);
+
       try {
         // Get existing session from Supabase
         const { data: { session }, error } = await supabase.auth.getSession();
-        
+
         if (error) {
           console.error('Auth session error:', error);
+          clearTimeout(timeoutId);
           clearUser();
           setLoading(false);
           return;
@@ -38,7 +46,7 @@ export const useAuth = () => {
             .select('*')
             .eq('id', session.user.id)
             .single();
-          
+
           if (userError || !userData) {
             console.error('User profile not found:', userError);
             clearUser();
@@ -52,10 +60,12 @@ export const useAuth = () => {
           // No active session in Supabase, clear any persisted Zustand state
           clearUser();
         }
-        
+
+        clearTimeout(timeoutId);
         setLoading(false);
       } catch (error) {
         console.error('Auth initialization error:', error);
+        clearTimeout(timeoutId);
         clearUser();
         setLoading(false);
       }

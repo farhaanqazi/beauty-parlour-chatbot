@@ -5,7 +5,7 @@ import { useAuthStore } from '../store/authStore';
 
 const apiClient = axios.create({
   baseURL: import.meta.env.VITE_API_URL as string,
-  timeout: 30000,
+  timeout: 15000, // 15s timeout — prevents infinite loading when backend is unreachable
 });
 
 // Track refresh state to prevent multiple simultaneous refresh attempts
@@ -59,6 +59,13 @@ apiClient.interceptors.request.use(async (config) => {
 apiClient.interceptors.response.use(
   (response) => response,
   async (error: AxiosError) => {
+    // Provide user-friendly error messages for network issues
+    if (error.code === 'ECONNABORTED' || error.message?.includes('timeout')) {
+      error.message = 'The server took too long to respond. Please check your connection and try again.';
+    } else if (!error.response && error.message?.includes('Network Error')) {
+      error.message = 'Unable to connect to the server. Please ensure the backend is running on port 8000.';
+    }
+
     const originalRequest = error.config as InternalAxiosRequestConfig & { _retry?: boolean };
     const isUnauthorized = error.response?.status === 401;
 

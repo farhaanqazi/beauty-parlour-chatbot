@@ -27,14 +27,14 @@ class ErrorBoundary extends React.Component<Props, State> {
   render() {
     if (this.state.hasError) {
       return (
-        <div className="min-h-screen flex flex-col items-center justify-center gap-4 p-6">
-          <h1 className="text-2xl font-semibold text-gray-900">Something went wrong</h1>
-          <p className="text-sm text-gray-500">
+        <div className="min-h-screen flex flex-col items-center justify-center gap-4 p-6 bg-[var(--color-surface-base)]">
+          <h1 className="text-2xl font-semibold text-[var(--color-neutral-100)]">Something went wrong</h1>
+          <p className="text-sm text-[var(--color-neutral-400)]">
             {this.state.message}
           </p>
           <button
             onClick={this.handleReset}
-            className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white font-medium rounded-lg transition-colors focus:outline-none focus:ring-2 focus:ring-blue-400 focus:ring-offset-2"
+            className="px-4 py-2 bg-[var(--color-accent)] hover:bg-[var(--color-accent-hover)] text-[var(--color-surface-base)] font-medium rounded-lg transition-colors focus:outline-none focus:ring-2 focus:ring-[var(--color-accent)] focus:ring-offset-2 focus:ring-offset-[var(--color-surface-base)]"
           >
             Return to Home
           </button>

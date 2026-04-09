@@ -37,7 +37,7 @@ async def get_customer(
     
     # Check tenant isolation - user can only access customers from their salon
     # Admin users can access all customers
-    if current_user.role != 'admin' and customer.salon_id != current_user.salon_id:
+    if current_user.role != 'admin' and str(customer.salon_id) != current_user.salon_id:
         raise HTTPException(status_code=403, detail="Access denied.")
     
     # Calculate lifetime metrics
@@ -136,7 +136,7 @@ async def get_customer_appointments(
         raise HTTPException(status_code=404, detail="Customer not found.")
     
     # Check tenant isolation
-    if current_user.role != 'admin' and customer.salon_id != current_user.salon_id:
+    if current_user.role != 'admin' and str(customer.salon_id) != current_user.salon_id:
         raise HTTPException(status_code=403, detail="Access denied.")
     
     # Fetch appointments with related data
@@ -198,7 +198,7 @@ async def list_customers(
     # Apply salon filter (tenant isolation)
     if current_user.role != 'admin':
         # Non-admin users can only see customers from their salon
-        statement = statement.where(Customer.salon_id == current_user.salon_id)
+        statement = statement.where(Customer.salon_id == UUID(current_user.salon_id))
     elif salon_id:
         # Admin can filter by specific salon
         statement = statement.where(Customer.salon_id == salon_id)

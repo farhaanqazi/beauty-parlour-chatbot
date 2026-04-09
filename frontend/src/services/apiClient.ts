@@ -97,21 +97,20 @@ apiClient.interceptors.response.use(
         }
       } catch (refreshError) {
         processQueue(refreshError as AxiosError, null);
-        // Refresh failed - sign out and redirect to login
-        await supabase.auth.signOut();
-        window.location.href = '/login';
+        // Refresh failed - clear auth state and let ProtectedRoute handle redirect
+        useAuthStore.getState().clearUser();
         return Promise.reject(refreshError);
       } finally {
         isRefreshing = false;
       }
     }
 
-    // Always route unauthenticated users back to login to avoid dead-end error screens.
+    // Always clear auth state on 401 to let ProtectedRoute handle soft navigation.
     if (isUnauthorized) {
       if (supabase) {
         supabase.auth.signOut();
       }
-      window.location.href = '/login';
+      useAuthStore.getState().clearUser();
     }
 
     return Promise.reject(error);

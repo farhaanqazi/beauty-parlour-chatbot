@@ -56,9 +56,15 @@ async def debug_jwt_decode(
     authorization: Optional[str] = Header(default=None),
     settings: Settings = Depends(get_app_settings),
 ) -> dict:
-    """Debug endpoint to diagnose JWT verification failures."""
+    """Debug endpoint to diagnose JWT verification failures. DISABLED in production."""
     import base64
     from jose import jwt, JWTError, ExpiredSignatureError
+
+    if settings.environment == "production":
+        raise HTTPException(
+            status_code=404,
+            detail="Debug endpoint disabled in production.",
+        )
 
     if not authorization or not authorization.startswith("Bearer "):
         return {

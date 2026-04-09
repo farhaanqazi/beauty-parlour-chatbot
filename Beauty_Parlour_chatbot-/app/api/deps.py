@@ -1,13 +1,15 @@
 from __future__ import annotations
 
+import logging
 from collections.abc import AsyncIterator
 from typing import Optional
 
 from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from jose import jwt, JWTError, ExpiredSignatureError
+from jose import JWTError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from supabase import create_client
 
 from app.core.config import Settings, get_settings
 from app.db.models.user import User
@@ -96,6 +98,23 @@ def get_notification_service(
 # JWT Authentication Dependencies
 # ============================================================================
 
+# Supabase admin client — created lazily and reused
+_supabase_admin = None
+
+
+def _get_supabase_admin() -> "create_client":
+    """Return a cached Supabase admin client using the service_role key."""
+    global _supabase_admin
+    if _supabase_admin is None:
+        settings = get_settings()
+        _supabase_admin = create_client(
+            settings.supabase_url,
+            settings.supabase_service_role_key,
+        )
+        logger = logging.getLogger(__name__)
+        logger.info("[JWT] Supabase admin client initialized")
+    return _supabase_admin
+
 
 async def get_current_user(
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
@@ -103,9 +122,10 @@ async def get_current_user(
 ) -> AuthenticatedUser:
     """
     JWT Authentication Dependency.
-    
-    Validates Bearer token and returns authenticated user.
-    
+
+    Validates Bearer token using the Supabase Admin SDK, which handles
+    both HS256 and ES256 tokens automatically — no manual JWKS needed.
+
     Raises:
         HTTPException 401: Missing authentication credentials
         HTTPException 401: Invalid or expired token
@@ -119,62 +139,45 @@ async def get_current_user(
         )
 
     token = credentials.credentials
-    settings = get_settings()
+    admin = _get_supabase_admin()
 
     try:
-        # Decode and validate JWT token
-        payload = jwt.decode(
-            token,
-            settings.supabase_jwt_secret,
-            algorithms=["HS256"],
-            options={"verify_aud": False},
-        )
+        # Supabase SDK verifies the token (HS256 or ES256) via its auth server
+        auth_user = admin.auth.get_user(token)
+        user_id = auth_user.user.id
 
-        # Extract user ID from token subject
-        user_id = payload.get("sub")
-        if not user_id:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid token: missing user ID",
-                headers={"WWW-Authenticate": "Bearer"},
-            )
-
-        # Fetch user from database
-        result = await db.execute(select(User).where(User.id == user_id))
-        user = result.scalar_one_or_none()
-
-        if not user:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="User not found",
-            )
-
-        if not user.is_active:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="User account is inactive",
-            )
-
-        return AuthenticatedUser(
-            id=user.id,
-            email=user.email,
-            role=user.role,
-            salon_id=str(user.salon_id) if user.salon_id else None,
-            is_active=user.is_active,
-        )
-
-    except ExpiredSignatureError:
+    except Exception as e:
+        logger = logging.getLogger(__name__)
+        logger.warning("[JWT] Token verification failed: %s", str(e))
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Token has expired",
+            detail="Invalid or expired token",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    except JWTError as e:
+
+    # Fetch user from local database
+    result = await db.execute(select(User).where(User.id == user_id))
+    user = result.scalar_one_or_none()
+
+    if not user:
         raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid token",
-            headers={"WWW-Authenticate": "Bearer"},
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="User not found",
         )
+
+    if not user.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="User account is inactive",
+        )
+
+    return AuthenticatedUser(
+        id=user.id,
+        email=user.email,
+        role=user.role.value,  # Convert UserRole enum to string value
+        salon_id=str(user.salon_id) if user.salon_id else None,
+        is_active=user.is_active,
+    )
 
 
 def require_roles(*roles: str):

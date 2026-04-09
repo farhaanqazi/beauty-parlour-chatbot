@@ -17,7 +17,8 @@
   "permissions": {
     "allow": [
       "Bash(do *)",
-      "Bash(done)"
+      "Bash(done)",
+      "Bash(f:\\beauty_parlour_chatbot\\venv\\scripts\\python *)"
     ]
   }
 }

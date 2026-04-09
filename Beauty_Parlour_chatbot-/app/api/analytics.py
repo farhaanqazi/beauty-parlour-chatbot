@@ -386,15 +386,17 @@ async def get_staff_utilization(
             filter_clause = f"AND {filter_clause.replace('WHERE ', '')}"
         
         # Get staff utilization from appointments
+        # Changed RIGHT JOIN to INNER JOIN + added salon_id filter on users
+        # to prevent leaking user data from other salons
         query = text(f"""
-            SELECT 
+            SELECT
                 u.full_name,
                 u.id as user_id,
                 COUNT(a.id) as appointment_count,
                 COALESCE(SUM(ss.price), 0) as revenue_generated
             FROM appointments a
             LEFT JOIN salon_services ss ON a.service_id = ss.id
-            RIGHT JOIN users u ON u.salon_id = a.salon_id
+            INNER JOIN users u ON u.salon_id = a.salon_id
             WHERE a.appointment_at >= :start_date
               {filter_clause}
             GROUP BY u.full_name, u.id

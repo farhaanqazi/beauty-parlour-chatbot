@@ -4,22 +4,21 @@ from datetime import datetime
 from typing import Optional
 from uuid import UUID
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, String, Text, UniqueConstraint, CheckConstraint
-from sqlalchemy.dialects.postgresql import UUID as PGUUID
+from sqlalchemy import Boolean, DateTime, Enum as SAEnum, ForeignKey, String, Text, UniqueConstraint, CheckConstraint
+from sqlalchemy.dialects.postgresql import UUID as PGUUID, ENUM as PG_ENUM
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.enums import UserRole
 from app.db.models.common import Base, TimestampMixin, UUIDPrimaryKeyMixin, utc_now
 
 
-# Use existing PostgreSQL enum type
 db_user_role = None  # Will be set at runtime from ENUM
 
 
 class User(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     """
     Dashboard user model for authentication and authorization.
-    
+
     Links to Supabase Auth users by ID. The id field should match
     the auth.uid() from Supabase Auth.
     """
@@ -33,7 +32,16 @@ class User(UUIDPrimaryKeyMixin, TimestampMixin, Base):
 
     email: Mapped[str] = mapped_column(String(255), unique=True, nullable=False, index=True)
     full_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
-    role: Mapped[UserRole] = mapped_column(nullable=False, index=True)
+    role: Mapped[UserRole] = mapped_column(
+        PG_ENUM(
+            UserRole,
+            name="user_role",
+            create_constraint=False,
+            values_callable=lambda x: [e.value for e in x],  # Use enum values, not member names
+        ),
+        nullable=False,
+        index=True,
+    )
     salon_id: Mapped[Optional[UUID]] = mapped_column(
         PGUUID(as_uuid=True),
         ForeignKey("salons.id", ondelete="SET NULL"),

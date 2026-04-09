@@ -7,6 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import joinedload
 
 from app.api.deps import get_db, get_current_user, require_roles, AuthenticatedUser
+from app.core.enums import UserRole
 from app.db.models.user import User
 from app.db.models.salon import Salon
 from typing import Optional
@@ -29,12 +30,20 @@ async def list_users(
     Admin access only.
     """
     statement = select(User).options(joinedload(User.salon))
-    
+
     # Apply filters
     if salon_id:
         statement = statement.where(User.salon_id == salon_id)
     if role:
-        statement = statement.where(User.role == role)
+        # Accept role as string and compare against enum values
+        try:
+            role_enum = UserRole(role.lower())
+            statement = statement.where(User.role == role_enum)
+        except ValueError:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid role. Must be one of: {[r.value for r in UserRole]}",
+            )
     if is_active is not None:
         statement = statement.where(User.is_active == is_active)
     

@@ -109,7 +109,6 @@ export const useAuth = () => {
 
           case 'SIGNED_OUT':
             useAuthStore.getState().clearUser();
-            window.location.href = '/login';
             break;
 
           case 'TOKEN_REFRESHED':
@@ -153,10 +152,17 @@ export const useAuth = () => {
 
     try {
       console.log('[useAuth.login] Calling supabase.auth.signInWithPassword...');
-      const { data, error } = await supabase!.auth.signInWithPassword({
-        email,
-        password,
-      });
+
+      // Add timeout to prevent infinite hang if Supabase is unreachable
+      const loginPromise = supabase!.auth.signInWithPassword({ email, password });
+      const timeoutPromise = new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error('Login request timed out after 10s. Please check your connection and try again.')), 10_000)
+      );
+
+      const { data, error } = await Promise.race([
+        loginPromise,
+        timeoutPromise,
+      ]) as Awaited<ReturnType<typeof supabase.auth.signInWithPassword>>;
 
       console.log('[useAuth.login] signInWithPassword completed. Error:', error?.message);
 

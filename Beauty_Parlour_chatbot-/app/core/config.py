@@ -93,8 +93,15 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("CORS_ORIGINS"),
     )
 
-    # Supabase JWT Configuration (for backend auth)
-    # Get this from Supabase Dashboard → Project Settings → API → JWT Secret
+    # Supabase Configuration
+    supabase_url: str = Field(
+        default="https://placeholder.supabase.co",
+        validation_alias=AliasChoices("SUPABASE_URL"),
+    )
+    supabase_service_role_key: str = Field(
+        default="your-supabase-service-role-key-here",
+        validation_alias=AliasChoices("SUPABASE_SERVICE_ROLE_KEY"),
+    )
     supabase_jwt_secret: str = Field(
         default="your-supabase-jwt-secret-here",
         validation_alias=AliasChoices("SUPABASE_JWT_SECRET"),

@@ -127,7 +127,7 @@ async def get_current_user(
             token,
             settings.supabase_jwt_secret,
             algorithms=["HS256"],
-            issuer="supabase",
+            options={"verify_aud": False},
         )
 
         # Extract user ID from token subject

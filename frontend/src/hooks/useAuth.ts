@@ -20,6 +20,14 @@ export const useAuth = () => {
         return;
       }
 
+      // If the store already has a user (e.g. from a just-completed login),
+      // don't re-initialize — it would race and clear the freshly-set state.
+      const existingUser = useAuthStore.getState().user;
+      if (existingUser) {
+        setLoading(false);
+        return;
+      }
+
       // Timeout: if auth init takes >10s, force resolve to prevent infinite spinner
       const timeoutId = setTimeout(() => {
         console.error('[useAuth] Auth initialization timed out after 10s');

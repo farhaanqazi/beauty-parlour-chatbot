@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Header
+from typing import Optional
 
 from app.api.deps import get_app_settings, get_db
 from app.core.config import Settings
@@ -48,3 +49,69 @@ async def get_entry_links(
         "whatsapp_link": whatsapp_link,
         "note": "Use either deep link as the source value for a QR code.",
     }
+
+
+@router.get("/debug/jwt-decode")
+async def debug_jwt_decode(
+    authorization: Optional[str] = Header(default=None),
+    settings: Settings = Depends(get_app_settings),
+) -> dict:
+    """Debug endpoint to diagnose JWT verification failures."""
+    import base64
+    from jose import jwt, JWTError, ExpiredSignatureError
+
+    if not authorization or not authorization.startswith("Bearer "):
+        return {
+            "error": "No Bearer token provided",
+            "hint": "Send Authorization: Bearer <token> header",
+        }
+
+    token = authorization.split(" ", 1)[1]
+
+    # Decode the token header to see what's in it
+    try:
+        header_b64 = token.split(".")[0]
+        # Add padding if needed
+        padding = 4 - len(header_b64) % 4
+        if padding != 4:
+            header_b64 += "=" * padding
+        header = base64.urlsafe_b64decode(header_b64).decode("utf-8")
+    except Exception as e:
+        header = f"Failed to decode: {e}"
+
+    # Decode the token payload to see what's in it
+    try:
+        payload_b64 = token.split(".")[1]
+        padding = 4 - len(payload_b64) % 4
+        if padding != 4:
+            payload_b64 += "=" * padding
+        payload_raw = base64.urlsafe_b64decode(payload_b64).decode("utf-8")
+    except Exception as e:
+        payload_raw = f"Failed to decode: {e}"
+
+    # Try to verify the JWT with HS256
+    result = {
+        "token_length": len(token),
+        "jwt_secret_configured": settings.supabase_jwt_secret[:10] + "..." if settings.supabase_jwt_secret else "NOT SET",
+        "token_header": header,
+        "token_payload_raw": payload_raw,
+    }
+
+    try:
+        payload = jwt.decode(
+            token,
+            settings.supabase_jwt_secret,
+            algorithms=["HS256"],
+            options={"verify_aud": False},
+        )
+        result["verification"] = "SUCCESS"
+        result["decoded_payload"] = payload
+    except ExpiredSignatureError:
+        result["verification"] = "FAILED: Token expired"
+    except JWTError as e:
+        result["verification"] = f"FAILED: {str(e)}"
+        result["hint"] = "If this says 'Invalid signature', the SUPABASE_JWT_SECRET in your backend .env does not match the key Supabase used to sign the token. Go to Supabase Dashboard → Project Settings → API → JWT Settings and copy the exact secret."
+    except Exception as e:
+        result["verification"] = f"FAILED: {type(e).__name__}: {e}"
+
+    return result

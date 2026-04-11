@@ -20,6 +20,7 @@
 
 import { useState } from 'react';
 import { AnimatePresence } from 'motion/react';
+import { useNavigate } from 'react-router-dom';
 import {
   Calendar,
   Users,
@@ -33,9 +34,10 @@ import {
   CheckCircle2,
   AlertCircle,
   X,
-  LogOut
+  LogOut,
+  Store
 } from 'lucide-react';
-import { useDashboardStats, useTodayAppointments, useStaffList, useWeeklyRevenue } from '../hooks/useDashboardData';
+import { useDashboardStats, useAllAppointments, useStaffList, useWeeklyRevenue } from '../hooks/useDashboardData';
 import { useAuth } from '../hooks/useAuth';
 import NewAppointmentModal from '../components/dashboard/NewAppointmentModal';
 
@@ -146,34 +148,64 @@ const StatusBadge = ({ status }: { status: string }) => {
 const StatCard = ({
   label,
   value,
-  icon: Icon
+  icon: Icon,
+  isSelected,
+  onClick,
 }: {
   label: string;
   value: string | number;
   icon: React.ElementType;
+  isSelected?: boolean;
+  onClick?: () => void;
 }) => (
-  <div className="bg-[var(--color-surface-raised)] rounded-2xl p-6 border border-[var(--color-neutral-700)] shadow-sm hover:shadow-[var(--shadow-glow)] transition-shadow">
+  <div
+    onClick={onClick}
+    role="button"
+    tabIndex={0}
+    onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') onClick?.(); }}
+    className={`
+      bg-[var(--color-surface-raised)] rounded-2xl p-6 border shadow-sm hover:shadow-[var(--shadow-glow)] transition-all cursor-pointer select-none
+      ${isSelected 
+        ? 'border-[var(--color-accent)] ring-2 ring-[var(--color-accent)]/50 bg-[var(--color-surface-raised)]/95' 
+        : 'border-[var(--color-neutral-700)] hover:border-[var(--color-neutral-600)]'
+      }
+    `}
+  >
     <div className="flex items-start justify-between mb-4">
-      <div className="p-3 bg-gradient-to-br from-[var(--color-accent)] to-amber-600 rounded-xl shadow-lg shadow-[var(--color-accent)]/30">
+      <div className={`p-3 rounded-xl shadow-lg transition-colors ${isSelected ? 'bg-gradient-to-br from-[var(--color-accent)] to-amber-600' : 'bg-gradient-to-br from-[var(--color-accent)]/80 to-amber-600/80'}`}>
         <Icon className="w-6 h-6 text-[var(--color-surface-base)]" strokeWidth={2} aria-hidden="true" />
       </div>
+      {isSelected && <CheckCircle2 className="w-5 h-5 text-[var(--color-accent)]" />}
     </div>
 
     <div className="space-y-1">
-      <p className="text-3xl font-bold text-[var(--color-neutral-100)]" style={{ fontFamily: 'var(--font-mono), monospace' }}>
+      <p className={`text-3xl font-bold transition-colors ${isSelected ? 'text-[var(--color-accent)]' : 'text-[var(--color-neutral-100)]'}`} style={{ fontFamily: 'var(--font-mono), monospace' }}>
         {value}
       </p>
-      <p className="text-sm text-[var(--color-neutral-400)]">{label}</p>
+      <p className={`text-sm font-medium transition-colors ${isSelected ? 'text-[var(--color-accent)]' : 'text-[var(--color-neutral-400)]'}`}>{label}</p>
     </div>
   </div>
 );
 
 const AppointmentRow = ({ appointment }: { appointment: any }) => {
-  const time = new Date(appointment.appointment_at).toLocaleTimeString('en-US', {
-    hour: '2-digit',
-    minute: '2-digit',
-    hour12: true
-  });
+  if (!appointment) return null;
+
+  // Safe date parsing
+  let time = '--:--';
+  let dateStr = '';
+  try {
+    if (appointment.appointment_at) {
+      const dateObj = new Date(appointment.appointment_at);
+      time = dateObj.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true });
+      dateStr = dateObj.toLocaleDateString('en-GB', { day: '2-digit', month: 'short' }); // e.g., "09 Apr"
+    }
+  } catch (e) {
+    console.error("Date parse error", e);
+  }
+
+  // Safe name handling
+  const name = appointment.customer_name || appointment.customer || 'Unknown';
+  const serviceName = appointment.service_name || appointment.service || 'No Service';
 
   return (
     <div className="flex items-center justify-between p-4 hover:bg-[var(--color-neutral-800)] rounded-xl transition-colors">
@@ -183,22 +215,23 @@ const AppointmentRow = ({ appointment }: { appointment: any }) => {
                      flex items-center justify-center text-[var(--color-surface-base)] font-semibold"
           aria-hidden="true"
         >
-          {appointment.customer_name.charAt(0).toUpperCase()}
+          {name.charAt(0).toUpperCase()}
         </div>
 
         <div className="flex-1 min-w-0">
-          <p className="font-medium text-[var(--color-neutral-100)] truncate">{appointment.customer_name}</p>
+          <p className="font-medium text-[var(--color-neutral-100)] truncate">{name}</p>
           <p className="text-sm text-[var(--color-neutral-400)] truncate">
-            {appointment.service_name}
+            {serviceName}
           </p>
         </div>
       </div>
 
       <div className="flex items-center gap-4">
-        <div className="hidden sm:block text-sm text-[var(--color-neutral-300)] font-medium">
-          {time}
+        <div className="text-right hidden sm:block">
+          <p className="text-sm font-medium text-[var(--color-neutral-200)]">{time}</p>
+          <p className="text-xs text-[var(--color-neutral-500)]">{dateStr}</p>
         </div>
-        <StatusBadge status={appointment.status} />
+        <StatusBadge status={appointment.status || 'pending'} />
       </div>
     </div>
   );
@@ -304,22 +337,42 @@ const RevenueChart = () => {
 const DashboardRedesigned = () => {
   const [searchQuery, setSearchQuery] = useState('');
   const [isNewAptModalOpen, setIsNewAptModalOpen] = useState(false);
+  const [activeFilter, setActiveFilter] = useState<string>('today'); // Default to 'today'
   const { user, logout } = useAuth();
-  
+  const navigate = useNavigate();
+
   // Fetch real data from Supabase via backend
   const { data: stats, isLoading: statsLoading, error: statsError, refetch: refetchStats } = useDashboardStats();
-  const { data: appointments, isLoading: aptLoading, error: aptError, refetch: refetchApt } = useTodayAppointments();
+  const { data: allAppointments, isLoading: allLoading, refetch: refetchAll } = useAllAppointments();
   const { data: staff, isLoading: staffLoading } = useStaffList();
 
-  // Filter appointments based on search
-  const filteredAppointments = appointments?.filter((apt: any) => {
-    if (!searchQuery) return true;
-    const query = searchQuery.toLowerCase();
-    return (
-      apt.customer_name.toLowerCase().includes(query) ||
-      apt.service_name.toLowerCase().includes(query)
-    );
-  });
+  // Filter appointments based on search AND active filter
+  const filteredAppointments = allAppointments?.filter((apt: any) => {
+    // 1. Search Filter
+    const matchesSearch = !searchQuery || 
+                          apt.customer_name?.toLowerCase().includes(searchQuery.toLowerCase()) || 
+                          apt.service_name?.toLowerCase().includes(searchQuery.toLowerCase());
+    
+    if (!matchesSearch) return false;
+
+    // 2. Status/Time Filter
+    if (activeFilter === 'today') {
+      const aptDate = new Date(apt.appointment_at);
+      const today = new Date();
+      return aptDate.toDateString() === today.toDateString();
+    }
+    
+    if (activeFilter === 'all') {
+      return true;
+    }
+    
+    // Status filter (pending, confirmed, completed)
+    return apt.status === activeFilter;
+  }) || [];
+
+  const handleFilterChange = (status: string) => {
+    setActiveFilter(prev => prev === status ? 'today' : status);
+  };
 
   // Loading state
   if (statsLoading) {
@@ -387,6 +440,18 @@ const DashboardRedesigned = () => {
             </div>
 
             <div className="flex items-center gap-2">
+              {/* Change Salon button - only for admins */}
+              {user?.role === 'admin' && (
+                <button
+                  onClick={() => navigate('/salon-select')}
+                  className="inline-flex items-center gap-2 px-3 py-2 text-sm text-[var(--color-neutral-300)] hover:text-[var(--color-accent)] hover:bg-[var(--color-neutral-700)] rounded-xl transition-colors"
+                  title="Change Salon"
+                >
+                  <Store className="w-4 h-4" />
+                  <span className="hidden sm:inline">Change Salon</span>
+                </button>
+              )}
+
               <div className="relative hidden md:block">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-[var(--color-neutral-500)]" strokeWidth={2} />
                 <input
@@ -428,26 +493,45 @@ const DashboardRedesigned = () => {
       {/* Main Content */}
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         {/* Stats Grid */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
-          <StatCard 
-            label="Today's Bookings" 
-            value={stats?.todays_appointments ?? 0} 
-            icon={Calendar} 
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4 mb-8">
+          <StatCard
+            label="Today"
+            value={allAppointments?.filter((a: any) => {
+              const d = new Date(a.appointment_at);
+              const t = new Date();
+              return d.toDateString() === t.toDateString();
+            }).length ?? 0}
+            icon={Calendar}
+            isSelected={activeFilter === 'today'}
+            onClick={() => handleFilterChange('today')}
           />
-          <StatCard 
-            label="Pending" 
-            value={stats?.pending_appointments ?? 0} 
-            icon={Clock} 
+          <StatCard
+            label="All Bookings"
+            value={allAppointments?.length ?? 0}
+            icon={Users}
+            isSelected={activeFilter === 'all'}
+            onClick={() => handleFilterChange('all')}
           />
-          <StatCard 
-            label="Confirmed" 
-            value={stats?.confirmed_appointments ?? 0} 
-            icon={CheckCircle2} 
+          <StatCard
+            label="Pending"
+            value={allAppointments?.filter((a: any) => a.status === 'pending').length ?? 0}
+            icon={Clock}
+            isSelected={activeFilter === 'pending'}
+            onClick={() => handleFilterChange('pending')}
           />
-          <StatCard 
-            label="Completed" 
-            value={stats?.completed_appointments ?? 0} 
-            icon={DollarSign} 
+          <StatCard
+            label="Confirmed"
+            value={allAppointments?.filter((a: any) => a.status === 'confirmed').length ?? 0}
+            icon={CheckCircle2}
+            isSelected={activeFilter === 'confirmed'}
+            onClick={() => handleFilterChange('confirmed')}
+          />
+          <StatCard
+            label="Completed"
+            value={allAppointments?.filter((a: any) => a.status === 'completed').length ?? 0}
+            icon={DollarSign}
+            isSelected={activeFilter === 'completed'}
+            onClick={() => handleFilterChange('completed')}
           />
         </div>
 
@@ -459,9 +543,16 @@ const DashboardRedesigned = () => {
               <div className="p-6 border-b border-[var(--color-neutral-700)]">
                 <div className="flex items-center justify-between mb-4">
                   <div>
-                    <h2 className="text-lg font-semibold text-[var(--color-neutral-100)]">Today's Appointments</h2>
+                    <h2 className="text-lg font-semibold text-[var(--color-neutral-100)]">
+                      {activeFilter === 'today' ? "Today's Appointments" : activeFilter === 'all' ? 'All Bookings' : `${activeFilter.charAt(0).toUpperCase() + activeFilter.slice(1)} Appointments`}
+                    </h2>
                     <p className="text-sm text-[var(--color-neutral-400)] mt-0.5">
-                      {filteredAppointments?.length ?? 0} appointments
+                      {activeFilter === 'today' 
+                        ? `${filteredAppointments?.length ?? 0} appointments today`
+                        : activeFilter === 'all'
+                        ? `${filteredAppointments?.length ?? 0} all bookings`
+                        : `Showing ${filteredAppointments?.length ?? 0} ${activeFilter} appointment${(filteredAppointments?.length ?? 0) !== 1 ? 's' : ''}`
+                      }
                     </p>
                   </div>
                   <button className="inline-flex items-center gap-2 px-3 py-2 bg-[var(--color-neutral-700)] hover:bg-[var(--color-neutral-600)] text-[var(--color-neutral-200)] font-medium rounded-lg transition-colors focus:outline-none focus:ring-2 focus:ring-[var(--color-accent)]" aria-label="Filter appointments">
@@ -486,11 +577,9 @@ const DashboardRedesigned = () => {
 
               {/* Appointments List */}
               <div className="divide-y divide-[var(--color-neutral-800)]" role="list" aria-label="Appointments list">
-                {aptLoading ? (
+                {allLoading ? (
                   <AppointmentsSkeleton />
-                ) : aptError ? (
-                  <ErrorState message="Failed to load appointments" onRetry={() => refetchApt()} />
-                ) : filteredAppointments && filteredAppointments.length > 0 ? (
+                ) : filteredAppointments.length > 0 ? (
                   <AnimatePresence>
                     {filteredAppointments.map((appointment: any) => (
                       <AppointmentRow key={appointment.id} appointment={appointment} />
@@ -548,10 +637,10 @@ const DashboardRedesigned = () => {
         </div>
       </main>
 
-      <NewAppointmentModal 
-        isOpen={isNewAptModalOpen} 
-        onClose={() => setIsNewAptModalOpen(false)} 
-        salonId={user?.salon_id ?? undefined} 
+      <NewAppointmentModal
+        isOpen={isNewAptModalOpen}
+        onClose={() => setIsNewAptModalOpen(false)}
+        salonId={localStorage.getItem('selectedSalonId') || user?.salon_id || undefined}
       />
     </div>
   );

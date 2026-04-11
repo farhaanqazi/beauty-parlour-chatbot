@@ -51,11 +51,18 @@ class ConversationEngine:
 
         if state.step == ConversationStep.GREETING:
             state.step = ConversationStep.LANGUAGE
+            # Combine greeting and language prompt into ONE message with buttons
+            greeting_text = flow_config["greeting"].format(salon_name=salon.name)
+            language_prompt = "Choose your language:"
+            # Create buttons for languages
+            lang_buttons = [{"label": lang["label"], "callback": f"lang_{lang['id']}"} for lang in flow_config["languages"]]
             return FlowResult(
                 state=state,
                 messages=[
-                    OutboundInstruction(text=flow_config["greeting"].format(salon_name=salon.name)),
-                    OutboundInstruction(text=self._choice_prompt("Choose your language", flow_config["languages"])),
+                    OutboundInstruction(
+                        text=f"{greeting_text}\n\n{language_prompt}",
+                        buttons=lang_buttons,
+                    ),
                 ],
             ), state_was_reset
 
@@ -69,55 +76,50 @@ class ConversationEngine:
             if not language:
                 result, _ = self._invalid_reply(state, self._choice_prompt("Please choose a valid language", flow_config["languages"]))
                 return result, state_was_reset
+            # Acknowledge language choice, then move directly to SERVICE (skip marriage type)
             state.slots.language = language["id"]
-            state.step = ConversationStep.MARRIAGE_TYPE
+            state.step = ConversationStep.SERVICE
+            # Create buttons for services
+            service_buttons = [{"label": svc.name, "callback": f"svc_{svc.id}"} for svc in services]
             return FlowResult(
                 state=state,
                 messages=[
                     OutboundInstruction(
-                        text=self._choice_prompt("Which type of marriage is this booking for", flow_config["marriage_types"]),
+                        text=f"Great! I'll continue in {language['label']}.\n\nWhich service do you need:",
+                        buttons=service_buttons,
                     )
                 ],
             ), state_was_reset
 
-        if state.step == ConversationStep.MARRIAGE_TYPE:
-            marriage_type = await self._resolve_choice(
-                cleaned_text,
-                flow_config["marriage_types"],
-                field_name="marriage_type",
-                language_hint=state.slots.language,
-            )
-            if not marriage_type:
-                result, _ = self._invalid_reply(state, self._choice_prompt("Please choose a valid marriage type", flow_config["marriage_types"]))
-                return result, state_was_reset
-            state.slots.marriage_type = marriage_type["label"]
-            state.step = ConversationStep.SERVICE
-            return FlowResult(
-                state=state,
-                messages=[OutboundInstruction(text=self._service_prompt(services))],
-            ), state_was_reset
-
         if state.step == ConversationStep.SERVICE:
-            service = await self._resolve_service(cleaned_text, services, state.slots.language)
+            # Handle button callback (svc_ID format)
+            if cleaned_text.startswith("svc_"):
+                service_id = cleaned_text.replace("svc_", "")
+                service = self._find_service_by_id(services, service_id)
+            else:
+                service = await self._resolve_service(cleaned_text, services, state.slots.language)
+            
             if not service:
                 result, _ = self._invalid_reply(state, self._service_prompt(services, header="Please choose a valid service"))
                 return result, state_was_reset
             state.slots.service_id = str(service.id)
             state.slots.service_name = service.name
-            if flow_config.get("ask_sample_images", True):
-                state.step = ConversationStep.SAMPLE_IMAGES
-                return FlowResult(
-                    state=state,
-                    messages=[
-                        OutboundInstruction(
-                            text=f"Would you like to see sample images for {service.name}? Reply YES or NO."
-                        )
-                    ],
-                ), state_was_reset
+            # Skip sample images, go directly to date selection with quick date buttons
             state.step = ConversationStep.APPOINTMENT_DATE
+            today = datetime.now(ZoneInfo(salon.timezone)).date()
+            date_buttons = [
+                {"label": "Today", "callback": f"date_{today.isoformat()}"},
+                {"label": "Tomorrow", "callback": f"date_{(today + timedelta(days=1)).isoformat()}"},
+                {"label": "Day after tomorrow", "callback": f"date_{(today + timedelta(days=2)).isoformat()}"},
+            ]
             return FlowResult(
                 state=state,
-                messages=[OutboundInstruction(text="Please share your preferred appointment date.")],
+                messages=[
+                    OutboundInstruction(
+                        text="Please choose your preferred appointment date:",
+                        buttons=date_buttons,
+                    )
+                ],
             ), state_was_reset
 
         if state.step == ConversationStep.SAMPLE_IMAGES:
@@ -147,18 +149,62 @@ class ConversationEngine:
             return FlowResult(state=state, messages=instructions), state_was_reset
 
         if state.step == ConversationStep.APPOINTMENT_DATE:
-            appointment_date = await self._parse_date(cleaned_text, salon.timezone, state.slots.language)
+            # Handle button callback (date_YYYY-MM-DD format)
+            if cleaned_text.startswith("date_"):
+                date_str = cleaned_text.replace("date_", "")
+                try:
+                    appointment_date = date.fromisoformat(date_str)
+                except ValueError:
+                    appointment_date = None
+            else:
+                appointment_date = await self._parse_date(cleaned_text, salon.timezone, state.slots.language)
+
             if not appointment_date:
                 result, _ = self._invalid_reply(
                     state,
                     "Please send a valid date, for example 25/03/2026 or next Monday.",
                 )
                 return result, state_was_reset
+            
+            # --- Validate 3-month advance booking limit HERE (not at confirmation) ---
+            from datetime import timedelta as td
+            max_booking_date = datetime.now(ZoneInfo(salon.timezone)).date() + td(days=90)
+            if appointment_date > max_booking_date:
+                # Date is too far in the future - show error and date buttons immediately
+                today = datetime.now(ZoneInfo(salon.timezone)).date()
+                return FlowResult(
+                    state=state,
+                    messages=[
+                        OutboundInstruction(text="Appointments can only be booked up to 3 months in advance."),
+                        OutboundInstruction(
+                            text="Please choose a date within the next 3 months:",
+                            buttons=[
+                                {"label": "Today", "callback": f"date_{today.isoformat()}"},
+                                {"label": "Tomorrow", "callback": f"date_{(today + td(days=1)).isoformat()}"},
+                                {"label": "Day after tomorrow", "callback": f"date_{(today + td(days=2)).isoformat()}"},
+                            ],
+                        ),
+                    ],
+                ), state_was_reset
+            
             state.slots.appointment_date = appointment_date
             state.step = ConversationStep.APPOINTMENT_TIME
+            # Add quick time buttons
+            time_buttons = [
+                {"label": "9:00 AM", "callback": "time_09:00"},
+                {"label": "11:00 AM", "callback": "time_11:00"},
+                {"label": "1:00 PM", "callback": "time_13:00"},
+                {"label": "3:00 PM", "callback": "time_15:00"},
+                {"label": "5:00 PM", "callback": "time_17:00"},
+            ]
             return FlowResult(
                 state=state,
-                messages=[OutboundInstruction(text="What time would you like to book?")],
+                messages=[
+                    OutboundInstruction(
+                        text="What time would you like to book?",
+                        buttons=time_buttons,
+                    )
+                ],
             ), state_was_reset
 
         if state.step == ConversationStep.APPOINTMENT_TIME:
@@ -168,16 +214,22 @@ class ConversationEngine:
                     state=state,
                     messages=[OutboundInstruction(text="Please share the appointment date first.")],
                 ), state_was_reset
+
+            # Handle button callback (time_HH:MM format)
+            if cleaned_text.startswith("time_"):
+                time_str = cleaned_text.replace("time_", "")
+                try:
+                    appointment_time = time.fromisoformat(time_str)
+                except ValueError:
+                    appointment_time = None
+            else:
+                appointment_time = await self._parse_time(
+                    cleaned_text,
+                    salon.timezone,
+                    state.slots.appointment_date,
+                    state.slots.language,
+                )
             
-            # Fix issue #4: Cache current time to avoid race condition in comparison
-            current_time = datetime.now(ZoneInfo(salon.timezone))
-            
-            appointment_time = await self._parse_time(
-                cleaned_text,
-                salon.timezone,
-                state.slots.appointment_date,
-                state.slots.language,
-            )
             if not appointment_time:
                 result, _ = self._invalid_reply(
                     state,
@@ -185,12 +237,14 @@ class ConversationEngine:
                 )
                 return result, state_was_reset
 
+            # Fix issue #4: Cache current time to avoid race condition in comparison
+            current_time = datetime.now(ZoneInfo(salon.timezone))
+
             appointment_at = datetime.combine(
                 state.slots.appointment_date,
                 appointment_time,
                 tzinfo=ZoneInfo(salon.timezone),
             )
-            # Use cached current_time instead of calling datetime.now() again
             if appointment_at <= current_time:
                 result, _ = self._invalid_reply(
                     state,
@@ -206,20 +260,30 @@ class ConversationEngine:
                     OutboundInstruction(
                         text=flow_config["confirmation_template"].format(
                             service=state.slots.service_name,
-                            marriage_type=state.slots.marriage_type,
                             date=state.slots.appointment_date.strftime("%d %b %Y"),
                             time=appointment_time.strftime("%I:%M %p"),
-                        )
+                        ),
+                        buttons=[
+                            {"label": "✅ YES", "callback": "confirm_yes"},
+                            {"label": "❌ NO", "callback": "confirm_no"},
+                        ],
                     )
                 ],
             ), state_was_reset
 
         if state.step == ConversationStep.CONFIRMATION:
-            confirmation = await self._resolve_yes_no(cleaned_text, state.slots.language)
+            # Handle button callbacks
+            if cleaned_text == "confirm_yes":
+                confirmation = True
+            elif cleaned_text == "confirm_no":
+                confirmation = False
+            else:
+                confirmation = await self._resolve_yes_no(cleaned_text, state.slots.language)
+            
             if confirmation is None:
                 result, _ = self._invalid_reply(
                     state,
-                    "Please reply YES to confirm your booking or NO to cancel it.",
+                    "Please tap YES to confirm your booking or NO to cancel it.",
                 )
                 return result, state_was_reset
             if not confirmation:

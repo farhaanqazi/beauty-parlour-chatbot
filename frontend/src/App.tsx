@@ -5,6 +5,7 @@ import ProtectedRoute from './components/common/ProtectedRoute';
 import ErrorBoundary from './components/common/ErrorBoundary';
 import LoginRedesigned from './pages/LoginRedesigned';
 import DashboardRedesigned from './pages/DashboardRedesigned';
+import SalonSelection from './pages/SalonSelection';
 
 // Lazy-loaded routes — code split by page
 const AppointmentsList = lazy(() => import('./pages/AppointmentsList'));
@@ -48,6 +49,16 @@ const App = () => {
         <BrowserRouter>
           <Suspense fallback={<PageLoader />}>
             <Routes>
+              {/* Salon Selection for Admins */}
+              <Route
+                path="/salon-select"
+                element={
+                  <ProtectedRoute allowedRoles={['admin']}>
+                    <SalonSelection />
+                  </ProtectedRoute>
+                }
+              />
+
               {/* Modern Auth View (Pure Tailwind + Custom UI) */}
               <Route path="/login" element={<LoginRedesigned />} />
 

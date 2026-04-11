@@ -33,6 +33,7 @@ export const appointmentService = {
   create: async (payload: {
     salon_id: string;
     customer_id: string;
+    customer_name: string;
     service_id: string;
     appointment_at: string;
     notes?: string;

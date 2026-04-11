@@ -228,6 +228,7 @@ CREATE TABLE IF NOT EXISTS notification_jobs (
     job_type        notification_job_type NOT NULL,
     status          notification_job_status NOT NULL DEFAULT 'pending',
     due_at          TIMESTAMPTZ NOT NULL,
+    locked_at       TIMESTAMPTZ,
     attempts        INTEGER NOT NULL DEFAULT 0,
     last_error      TEXT,
     sent_at         TIMESTAMPTZ,
@@ -235,6 +236,10 @@ CREATE TABLE IF NOT EXISTS notification_jobs (
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
     CONSTRAINT uq_appointment_job_type UNIQUE (appointment_id, job_type)
 );
+
+-- Ensure new columns exist for previously created databases
+ALTER TABLE IF EXISTS notification_jobs
+    ADD COLUMN IF NOT EXISTS locked_at TIMESTAMPTZ;
 
 -- SALON CLOSURES — Audit log of all closures (NEW in v2)
 CREATE TABLE IF NOT EXISTS salon_closures (

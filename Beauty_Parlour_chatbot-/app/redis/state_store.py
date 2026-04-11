@@ -3,6 +3,7 @@ from __future__ import annotations
 from redis.asyncio import Redis
 
 from app.schemas.state import ConversationState
+from app.utils.logger import app_logger
 
 
 class RedisStateStore:
@@ -20,14 +21,48 @@ class RedisStateStore:
         channel: str,
         external_user_id: str,
     ) -> ConversationState | None:
-        raw_state = await self.redis_client.get(self._key(salon_id, channel, external_user_id))
+        try:
+            raw_state = await self.redis_client.get(self._key(salon_id, channel, external_user_id))
+        except Exception as e:
+            app_logger.error(
+                "Redis GET failed",
+                event="redis_error",
+                operation="GET",
+                key=self._key(salon_id, channel, external_user_id),
+                error_type=type(e).__name__,
+                error_message=str(e),
+            )
+            raise
         if not raw_state:
             return None
         return ConversationState.model_validate_json(raw_state)
 
     async def save_state(self, state: ConversationState) -> None:
         key = self._key(state.salon_id, state.channel.value, state.external_user_id)
-        await self.redis_client.set(key, state.model_dump_json(), ex=self.ttl_seconds)
+        try:
+            await self.redis_client.set(key, state.model_dump_json(), ex=self.ttl_seconds)
+        except Exception as e:
+            app_logger.error(
+                "Redis SET failed",
+                event="redis_error",
+                operation="SET",
+                key=key,
+                error_type=type(e).__name__,
+                error_message=str(e),
+            )
+            raise
 
     async def clear_state(self, salon_id: str, channel: str, external_user_id: str) -> None:
-        await self.redis_client.delete(self._key(salon_id, channel, external_user_id))
+        key = self._key(salon_id, channel, external_user_id)
+        try:
+            await self.redis_client.delete(key)
+        except Exception as e:
+            app_logger.error(
+                "Redis DELETE failed",
+                event="redis_error",
+                operation="DELETE",
+                key=key,
+                error_type=type(e).__name__,
+                error_message=str(e),
+            )
+            raise

@@ -1,22 +1,38 @@
 from __future__ import annotations
 
 import logging
+import os
+import sys
 from contextlib import asynccontextmanager
 from typing import Dict, Any
 
 import httpx
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from slowapi import _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from starlette import status
+from starlette.middleware.errors import ServerErrorMiddleware
 
 from app.api.router import api_router
 from app.core.config import get_settings
+from app.core.logging_config import setup_logging
 from app.db.session import db_session
 from app.llm.service import LLMService
+from app.middleware.exception_handler import build_exception_handler
+from app.middleware.rate_limiter import limiter as shared_limiter
+from app.middleware.request_id import RequestIDMiddleware
+from app.middleware.security_headers import SecurityHeadersMiddleware
 from app.messaging.dispatcher import MessageDispatcher
 from app.redis.client import build_redis_client
 from app.redis.state_store import RedisStateStore
+from app.utils.logger import app_logger
 
 
+# Configure logging before anything else
+setup_logging()
 logger = logging.getLogger(__name__)
 
 
@@ -126,6 +142,21 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# === REPLACE Starlette's ServerErrorMiddleware ===
+# This is the LAST middleware in the chain. It catches ALL exceptions that
+# escape the rest of the stack, including ExceptionGroups from middleware.
+app.add_middleware(
+    ServerErrorMiddleware,
+    handler=build_exception_handler(),
+    debug=settings.debug,
+)
+
+# === MIDDLEWARE REGISTRATION ORDER (outside-in) ===
+# 1. Security Headers (applied to all responses)
+app.add_middleware(SecurityHeadersMiddleware)
+# 2. Request ID (pure ASGI — avoids Starlette's ExceptionGroup bug)
+app.add_middleware(RequestIDMiddleware)
+# 3. CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=cors_origins,
@@ -135,6 +166,72 @@ app.add_middleware(
 )
 
 app.include_router(api_router, prefix=settings.api_prefix)
+
+
+# ============================================================================
+# Rate Limiting
+# ============================================================================
+app.state.limiter = shared_limiter  # Required by slowapi exception handler
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+# Per-endpoint rate limits are applied via decorators in individual routers.
+# No global middleware needed — each endpoint defines its own limits.
+
+
+# ============================================================================
+# Exception Handlers (route-level only)
+# ============================================================================
+# Global exceptions are caught by ServerErrorMiddleware above.
+
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request: Request, exc: HTTPException) -> JSONResponse:
+    """
+    Handle FastAPI HTTPExceptions (4xx errors).
+    Logs auth failures and permission denials for security auditing.
+    """
+    request_id = getattr(request.state, "request_id", "unknown")
+    
+    # Only log 4xx errors that indicate security events (not routine 404s)
+    if exc.status_code in {status.HTTP_401_UNAUTHORIZED, status.HTTP_403_FORBIDDEN}:
+        event_type = "auth_failure" if exc.status_code == 401 else "authorization_failure"
+        app_logger.warn(
+            f"HTTP {exc.status_code}: {exc.detail}",
+            event=event_type,
+            request_id=request_id,
+            path=str(request.url.path),
+            method=request.method,
+            status_code=exc.status_code,
+            detail=exc.detail,
+        )
+    
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"detail": exc.detail, "request_id": request_id},
+        headers=exc.headers,
+    )
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
+    """
+    Handle request validation errors (malformed JSON, missing fields, bad types).
+    Logs structured summary without dumping full request body.
+    """
+    request_id = getattr(request.state, "request_id", "unknown")
+    
+    app_logger.warn(
+        "Request validation failed",
+        event="validation_error",
+        request_id=request_id,
+        path=str(request.url.path),
+        method=request.method,
+        error_count=len(exc.errors()),
+        errors=[{"loc": e["loc"], "msg": e["msg"], "type": e["type"]} for e in exc.errors()],
+    )
+    
+    return JSONResponse(
+        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        content={"detail": exc.errors(), "request_id": request_id},
+    )
 
 
 @app.get("/health", tags=["health"])
@@ -179,24 +276,25 @@ async def readiness_check() -> dict:
     return status
 
 
-@app.get("/debug/db-url", tags=["debug"])
-async def debug_db_url() -> dict:
-    """Debug endpoint to verify database URL configuration."""
-    from app.core.config import get_settings
-    settings = get_settings()
-    # Mask password in URL for security
-    db_url = settings.database_url
-    if "@" in db_url:
-        parts = db_url.split("@")
-        if "://" in parts[0]:
-            protocol, creds = parts[0].split("://", 1)
-            if ":" in creds:
-                username = creds.split(":")[0]
-                masked = f"{protocol}://{username}:***@{parts[1]}"
+if settings.environment != "production":
+    @app.get("/debug/db-url", tags=["debug"])
+    async def debug_db_url() -> dict:
+        """Debug endpoint to verify database URL configuration."""
+        from app.core.config import get_settings
+        settings = get_settings()
+        # Mask password in URL for security
+        db_url = settings.database_url
+        if "@" in db_url:
+            parts = db_url.split("@")
+            if "://" in parts[0]:
+                protocol, creds = parts[0].split("://", 1)
+                if ":" in creds:
+                    username = creds.split(":")[0]
+                    masked = f"{protocol}://{username}:***@{parts[1]}"
+                else:
+                    masked = f"{protocol}://***@{parts[1]}"
             else:
-                masked = f"{protocol}://***@{parts[1]}"
+                masked = "***"
         else:
             masked = "***"
-    else:
-        masked = "***"
-    return {"db_url_masked": masked}
+        return {"db_url_masked": masked}

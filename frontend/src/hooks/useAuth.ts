@@ -193,18 +193,21 @@ export const useAuth = () => {
 
       // Explicitly set the user to state BEFORE navigating to avoid ProtectedRoute bouncing back
       console.log('[useAuth.login] Setting user state synchronously...');
-      
+
       // Set both Zustand store AND local state to ensure consistency
       useAuthStore.getState().setUser(userData as AuthUser, data.session.access_token);
-      
+
       // Also update local state via setUser to ensure isAuthenticated is true immediately
       setUser(userData as AuthUser, data.session.access_token);
 
       console.log('[useAuth.login] Navigation triggered. Role:', userData.role);
-      // Navigate to unified dashboard
-      if (userData.role) {
+      
+      // Navigate based on role: admins go to salon selection, others go direct to dashboard
+      if (userData.role === 'admin') {
         setLoading(false);
-        // Small delay to ensure state propagation
+        setTimeout(() => navigate('/salon-select'), 0);
+      } else if (userData.role) {
+        setLoading(false);
         setTimeout(() => navigate('/dashboard'), 0);
       } else {
         setLoading(false);

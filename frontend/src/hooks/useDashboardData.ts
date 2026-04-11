@@ -8,6 +8,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   fetchDashboardStats,
+  fetchAllAppointments,
   fetchUpcomingAppointments,
   fetchStaffBySalon,
   fetchAppointmentsForRevenue,
@@ -47,14 +48,15 @@ export const useAdminDashboardStats = () => {
 export const useDashboardStats = () => {
   const { user } = useAuthStore();
   const token = useAuthStore((state) => state.token);
-  const salonId = user?.salon_id;
+  // Use selected salon from localStorage (set by admin salon selection page), fallback to user's salon_id
+  const salonId = localStorage.getItem('selectedSalonId') || user?.salon_id;
 
   return useQuery({
     queryKey: ['dashboard', 'stats', salonId],
     queryFn: fetchDashboardStats,
     staleTime: 30000, // 30 seconds
     retry: 2,
-    enabled: !!salonId && !!token, // Avoid unauthenticated calls to protected backend endpoints
+    enabled: !!salonId && !!token,
   });
 };
 
@@ -71,36 +73,40 @@ export const useDashboardStats = () => {
 export const useTodayAppointments = () => {
   const { user } = useAuthStore();
   const token = useAuthStore((state) => state.token);
-  const salonId = user?.salon_id;
+  const salonId = localStorage.getItem('selectedSalonId') || user?.salon_id;
 
   return useQuery({
     queryKey: ['dashboard', 'appointments', 'today', salonId],
     queryFn: () => salonId ? fetchUpcomingAppointments(salonId, 24) : Promise.resolve([]),
-    staleTime: 10000, // 10 seconds - appointments change frequently
+    staleTime: 10000,
     retry: 2,
     enabled: !!salonId && !!token,
   });
 };
 
-// ============================================================================
-// Hook: useStaffList
-// ============================================================================
+export const useAllAppointments = () => {
+  const { user } = useAuthStore();
+  const token = useAuthStore((state) => state.token);
+  const salonId = localStorage.getItem('selectedSalonId') || user?.salon_id;
 
-/**
- * Fetch staff members for the user's salon
- * 
- * @example
- * const { data: staff, isLoading } = useStaffList();
- */
+  return useQuery({
+    queryKey: ['dashboard', 'appointments', 'all', salonId],
+    queryFn: () => salonId ? fetchAllAppointments(salonId) : Promise.resolve([]),
+    staleTime: 10000,
+    retry: 2,
+    enabled: !!salonId && !!token,
+  });
+};
+
 export const useStaffList = () => {
   const { user } = useAuthStore();
   const token = useAuthStore((state) => state.token);
-  const salonId = user?.salon_id;
+  const salonId = localStorage.getItem('selectedSalonId') || user?.salon_id;
 
   return useQuery({
     queryKey: ['dashboard', 'staff', salonId],
     queryFn: () => salonId ? fetchStaffBySalon(salonId) : Promise.resolve([]),
-    staleTime: 60000, // 1 minute - staff list doesn't change often
+    staleTime: 60000,
     retry: 2,
     enabled: !!salonId && !!token,
   });
@@ -147,7 +153,7 @@ export const useUpdateAppointmentStatus = () => {
 export const useWeeklyRevenue = () => {
   const { user } = useAuthStore();
   const token = useAuthStore((state) => state.token);
-  const salonId = user?.salon_id;
+  const salonId = localStorage.getItem('selectedSalonId') || user?.salon_id;
 
   return useQuery({
     queryKey: ['dashboard', 'revenue', 'weekly', salonId],

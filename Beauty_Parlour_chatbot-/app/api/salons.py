@@ -47,7 +47,7 @@ async def list_salons(
             "is_active": salon.is_active,
             "services_count": len([s for s in salon.services if s.is_active]),
             "channels": [
-                {"channel": ch.channel.value, "is_enabled": ch.is_enabled}
+                {"channel": ch.channel.value if hasattr(ch.channel, 'value') else ch.channel, "is_enabled": ch.is_enabled}
                 for ch in salon.channels
             ],
             "created_at": salon.created_at.isoformat() if salon.created_at else None,
@@ -62,11 +62,11 @@ async def list_salons(
 async def get_salon(
     salon_id: UUID,
     db=Depends(get_db),
-    user: AuthenticatedUser = Depends(require_roles("admin")),
+    user: AuthenticatedUser = Depends(require_roles("admin", "salon_owner", "reception")),
 ) -> dict:
     """
     Get a single salon by ID with full details.
-    Admin access only.
+    Admin, salon owner, and reception access.
     """
     statement = (
         select(Salon)
@@ -78,7 +78,7 @@ async def get_salon(
         .where(Salon.id == salon_id)
     )
     result = await db.execute(statement)
-    salon = result.scalar_one_or_none()
+    salon = result.unique().scalar_one_or_none()
     
     if not salon:
         raise HTTPException(status_code=404, detail="Salon not found.")
@@ -107,7 +107,7 @@ async def get_salon(
         "channels": [
             {
                 "id": str(ch.id),
-                "channel": ch.channel.value,
+                "channel": ch.channel.value if hasattr(ch.channel, 'value') else ch.channel,
                 "is_enabled": ch.is_enabled,
                 "inbound_identifier": ch.inbound_identifier,
             }
@@ -117,7 +117,7 @@ async def get_salon(
             {
                 "id": str(contact.id),
                 "name": contact.name,
-                "channel": contact.channel.value,
+                "channel": contact.channel.value if hasattr(contact.channel, 'value') else contact.channel,
                 "destination": contact.destination,
                 "is_active": contact.is_active,
             }

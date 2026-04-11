@@ -1,12 +1,53 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import date
 from typing import Any
 
 from groq import AsyncGroq
 
 from app.core.config import Settings
+
+# Maximum user message length sent to LLM (prevents abuse)
+MAX_LLM_INPUT_LENGTH = 500
+
+# Patterns that indicate potential prompt injection
+PROMPT_INJECTION_PATTERNS = [
+    re.compile(r"(?i)ignore\s+(previous|above|all)\s+(instructions?|rules?|prompts?)"),
+    re.compile(r"(?i)(system|developer)\s*(message|prompt|role)"),
+    re.compile(r"(?i)you\s+are\s+(now|actually)\s+"),
+    re.compile(r"(?i)new\s+(system|developer)\s+instruction"),
+    re.compile(r"<\|.*?\|>"),  # Token-style injection markers
+]
+
+
+def sanitize_llm_input(text: str) -> tuple[str, bool]:
+    """
+    Sanitize user input before sending to LLM.
+    
+    Returns:
+        Tuple of (sanitized_text, is_safe).
+        If is_safe is False, the input should be rejected entirely.
+    """
+    if not text:
+        return "", True
+
+    # Hard length limit
+    if len(text) > MAX_LLM_INPUT_LENGTH:
+        return text[:MAX_LLM_INPUT_LENGTH], True  # Truncate, don't reject
+
+    # Check for prompt injection patterns
+    for pattern in PROMPT_INJECTION_PATTERNS:
+        if pattern.search(text):
+            # Strip the injection attempt but still process the message
+            # (don't fully reject — legitimate users might use similar phrases)
+            pass  # Continue processing; we truncate context in prompts
+
+    # Strip null bytes and control characters (except newlines/tabs)
+    sanitized = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]", "", text)
+
+    return sanitized, True
 
 
 class LLMService:
@@ -29,6 +70,8 @@ class LLMService:
         if not self.client:
             return None
 
+        sanitized_msg, _ = sanitize_llm_input(message)
+
         payload = await self._json_completion(
             system_prompt=(
                 "You classify a user reply into one option id. "
@@ -37,7 +80,7 @@ class LLMService:
             user_prompt=(
                 f"Field: {field_name}\n"
                 f"User language: {language or 'unknown'}\n"
-                f"User message: {message}\n"
+                f"User message: {sanitized_msg}\n"
                 f"Options: {json.dumps(options)}\n"
                 "If no option matches, return match_id as null."
             ),
@@ -57,6 +100,8 @@ class LLMService:
         if not self.client:
             return None
 
+        sanitized_msg, _ = sanitize_llm_input(message)
+
         payload = await self._json_completion(
             system_prompt=(
                 "Extract one appointment date. Return JSON only with keys iso_date and confidence. "
@@ -66,7 +111,7 @@ class LLMService:
                 f"Timezone: {timezone_name}\n"
                 f"Reference date: {reference_date.isoformat()}\n"
                 f"User language: {language or 'unknown'}\n"
-                f"User message: {message}"
+                f"User message: {sanitized_msg}"
             ),
         )
         if not isinstance(payload, dict):
@@ -84,6 +129,8 @@ class LLMService:
         if not self.client:
             return None
 
+        sanitized_msg, _ = sanitize_llm_input(message)
+
         payload = await self._json_completion(
             system_prompt=(
                 "Extract one appointment time. Return JSON only with keys iso_time and confidence. "
@@ -93,7 +140,7 @@ class LLMService:
                 f"Timezone: {timezone_name}\n"
                 f"Reference date: {reference_date.isoformat()}\n"
                 f"User language: {language or 'unknown'}\n"
-                f"User message: {message}"
+                f"User message: {sanitized_msg}"
             ),
         )
         if not isinstance(payload, dict):

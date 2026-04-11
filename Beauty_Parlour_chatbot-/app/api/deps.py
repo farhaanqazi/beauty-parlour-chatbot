@@ -1,12 +1,9 @@
 from __future__ import annotations
-
-import logging
 from collections.abc import AsyncIterator
 from typing import Optional
 
 from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from jose import JWTError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from supabase import create_client
@@ -19,6 +16,7 @@ from app.messaging.dispatcher import MessageDispatcher
 from app.redis.state_store import RedisStateStore
 from app.services.conversation_service import ConversationService
 from app.services.notification_service import NotificationService
+from app.utils.logger import app_logger
 
 
 # Security scheme for Bearer token
@@ -111,8 +109,10 @@ def _get_supabase_admin() -> "create_client":
             settings.supabase_url,
             settings.supabase_service_role_key,
         )
-        logger = logging.getLogger(__name__)
-        logger.info("[JWT] Supabase admin client initialized")
+        app_logger.info(
+            "Supabase admin client initialized",
+            event="auth_admin_client_initialized",
+        )
     return _supabase_admin
 
 
@@ -132,6 +132,11 @@ async def get_current_user(
         HTTPException 403: User not found or inactive
     """
     if not credentials:
+        app_logger.warn(
+            "Missing authentication credentials",
+            event="auth_failure",
+            error_type="missing_credentials",
+        )
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Missing authentication credentials",
@@ -142,13 +147,21 @@ async def get_current_user(
     admin = _get_supabase_admin()
 
     try:
+        app_logger.info(
+            "Authentication attempt",
+            event="auth_attempt",
+            auth_scheme="bearer",
+        )
         # Supabase SDK verifies the token (HS256 or ES256) via its auth server
         auth_user = admin.auth.get_user(token)
         user_id = auth_user.user.id
 
     except Exception as e:
-        logger = logging.getLogger(__name__)
-        logger.warning("[JWT] Token verification failed: %s", str(e))
+        app_logger.warn(
+            "Token verification failed",
+            event="auth_failure",
+            error_type=type(e).__name__,
+        )
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid or expired token",
@@ -160,17 +173,36 @@ async def get_current_user(
     user = result.scalar_one_or_none()
 
     if not user:
+        app_logger.warn(
+            "Authentication failed: user not found",
+            event="auth_failure",
+            error_type="user_not_found",
+            user_id=user_id,
+        )
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="User not found",
         )
 
     if not user.is_active:
+        app_logger.warn(
+            "Authentication failed: user inactive",
+            event="auth_failure",
+            error_type="user_inactive",
+            user_id=user.id,
+        )
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="User account is inactive",
         )
 
+    app_logger.info(
+        "Authentication success",
+        event="auth_success",
+        user_id=user.id,
+        role=user.role.value,
+        salon_id=str(user.salon_id) if user.salon_id else None,
+    )
     return AuthenticatedUser(
         id=user.id,
         email=user.email,

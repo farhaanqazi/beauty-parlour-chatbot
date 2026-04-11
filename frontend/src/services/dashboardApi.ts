@@ -64,6 +64,11 @@ export const fetchDashboardStats = async (): Promise<DashboardStats> => {
  * Fetch upcoming appointments for a salon
  * MATCHES: @router.get("/salons/{salon_slug}/appointments/upcoming")
  */
+export const fetchAllAppointments = async (salonId: string): Promise<DashboardAppointment[]> => {
+  const { data } = await apiClient.get<any>(`/api/v1/salons/${salonId}/appointments/all`);
+  return data.appointments || [];
+};
+
 export const fetchUpcomingAppointments = async (salonSlug: string, hours: number = 24): Promise<DashboardAppointment[]> => {
   const { data } = await apiClient.get(`/api/v1/salons/${salonSlug}/appointments/upcoming`, {
     params: { hours },

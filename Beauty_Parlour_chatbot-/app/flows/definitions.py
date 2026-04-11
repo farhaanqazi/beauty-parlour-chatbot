@@ -21,7 +21,6 @@ BASE_FLOW_CONFIG: dict[str, Any] = {
     "confirmation_template": (
         "Please confirm your appointment:\n"
         "Service: {service}\n"
-        "Marriage type: {marriage_type}\n"
         "Date: {date}\n"
         "Time: {time}\n"
         "Reply YES to confirm or NO to cancel."

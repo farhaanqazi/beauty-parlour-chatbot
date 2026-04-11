@@ -23,6 +23,8 @@ class NormalizedInboundMessage(BaseModel):
 class OutboundInstruction(BaseModel):
     text: str
     media_urls: list[str] = Field(default_factory=list)
+    # Inline keyboard buttons for Telegram (list of label/callback pairs)
+    buttons: list[dict[str, str]] = Field(default_factory=list)  # [{"label": "English", "callback": "lang_english"}]
 
 
 class FlowResult(BaseModel):

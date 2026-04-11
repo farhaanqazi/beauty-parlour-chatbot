@@ -42,13 +42,14 @@ class ConversationStep(str, Enum):
 class NotificationJobType(str, Enum):
     REMINDER_24H = "reminder_24h"
     REMINDER_1H = "reminder_1h"
+    REMINDER_15M = "reminder_15m"
     SALON_DAILY_DIGEST = "salon_daily_digest"
     SALON_OPENING_DIGEST = "salon_opening_digest"
     SALON_PER_APPOINTMENT = "salon_per_appointment"
     CLOSURE_CANCELLATION = "closure_cancellation"
     # Legacy names for backwards compatibility
     CUSTOMER_REMINDER_60 = "reminder_1h"
-    CUSTOMER_REMINDER_15 = "reminder_1h"
+    CUSTOMER_REMINDER_15 = "reminder_15m"
     SALON_DIGEST_60 = "salon_daily_digest"
     SALON_DIGEST_15 = "salon_opening_digest"
     CUSTOMER_CANCELLATION = "closure_cancellation"

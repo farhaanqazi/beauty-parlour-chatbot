@@ -34,7 +34,7 @@
  *    - stagger-sequence: 50ms stagger per element
  */
 
-import { useState } from 'react';
+import { useState, memo } from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
@@ -55,6 +55,64 @@ const schema = z.object({
 });
 
 type FormData = z.infer<typeof schema>;
+
+/**
+ * LOGIN HEADER - Memoized component
+ * 
+ * UI/UX Pro Max Priority 7 (Animation):
+ * - Stable animations (duration: 150-300ms)
+ * - Motion has meaning: header stays visible during loading
+ * - initial={false} prevents animation replay on parent re-renders
+ */
+const LoginHeader = memo(() => (
+  <motion.div
+    initial={false}
+    animate={{ opacity: 1, y: 0 }}
+    transition={{ duration: 0.6, ease: [0.25, 0.46, 0.45, 0.94] }}
+    className="mb-10 text-center opacity-0 translate-y-[-10px]"
+    style={{ opacity: 0, y: -10 }}
+  >
+    <div className="inline-flex items-center gap-3 mb-4 relative">
+      {/* Soft glow behind logo */}
+      <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-20 h-20 bg-[var(--color-accent)]/20 rounded-full blur-[40px] pointer-events-none" />
+
+      {/* Logo icon - Dark Craft gold accent */}
+      <motion.div
+        initial={false}
+        animate={{ scale: 1, opacity: 1 }}
+        transition={{ delay: 0.2, duration: 0.5 }}
+        className="relative inline-flex items-center justify-center w-14 h-14
+                   bg-gradient-to-br from-[var(--color-accent)] to-amber-600
+                   rounded-2xl shadow-lg shadow-[var(--color-accent)]/30"
+        style={{ scale: 0.8, opacity: 0 }}
+      >
+        <Briefcase className="w-7 h-7 text-[var(--color-surface-base)]" strokeWidth={2} />
+      </motion.div>
+    </div>
+
+    <motion.h1
+      initial={false}
+      animate={{ opacity: 1 }}
+      transition={{ delay: 0.3, duration: 0.6 }}
+      className="text-3xl font-semibold text-[var(--color-neutral-100)] tracking-tight"
+      style={{ fontFamily: 'var(--font-display), sans-serif', opacity: 0 }}
+    >
+      Salon Dashboard
+    </motion.h1>
+
+    <motion.p
+      initial={false}
+      animate={{ opacity: 1 }}
+      transition={{ delay: 0.4, duration: 0.6 }}
+      className="mt-2 text-sm text-[var(--color-neutral-400)]"
+      style={{ opacity: 0 }}
+    >
+      Sign in to continue to your salon management
+    </motion.p>
+  </motion.div>
+));
+
+LoginHeader.displayName = 'LoginHeader';
 
 const LoginFormRedesigned = () => {
   const { login } = useAuth();
@@ -84,52 +142,8 @@ const LoginFormRedesigned = () => {
 
   return (
     <div className="w-full max-w-md px-4">
-      {/*
-       * HEADER: Brand with soft glow
-       * Typography: Professional, modern aesthetic
-       */}
-      <motion.div
-        initial={{ opacity: 0, y: -10 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.6, ease: [0.25, 0.46, 0.45, 0.94] }}
-        className="mb-10 text-center"
-      >
-        <div className="inline-flex items-center gap-3 mb-4 relative">
-          {/* Soft glow behind logo */}
-          <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-20 h-20 bg-[var(--color-accent)]/20 rounded-full blur-[40px] pointer-events-none" />
-
-          {/* Logo icon - Dark Craft gold accent */}
-          <motion.div
-            initial={{ scale: 0.8, opacity: 0 }}
-            animate={{ scale: 1, opacity: 1 }}
-            transition={{ delay: 0.2, duration: 0.5 }}
-            className="relative inline-flex items-center justify-center w-14 h-14
-                       bg-gradient-to-br from-[var(--color-accent)] to-amber-600
-                       rounded-2xl shadow-lg shadow-[var(--color-accent)]/30"
-          >
-            <Briefcase className="w-7 h-7 text-[var(--color-surface-base)]" strokeWidth={2} />
-          </motion.div>
-        </div>
-
-        <motion.h1
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          transition={{ delay: 0.3, duration: 0.6 }}
-          className="text-3xl font-semibold text-[var(--color-neutral-100)] tracking-tight"
-          style={{ fontFamily: 'var(--font-display), sans-serif' }}
-        >
-          Salon Dashboard
-        </motion.h1>
-
-        <motion.p
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          transition={{ delay: 0.4, duration: 0.6 }}
-          className="mt-2 text-sm text-[var(--color-neutral-400)]"
-        >
-          Sign in to continue to your salon management
-        </motion.p>
-      </motion.div>
+      {/* HEADER - Memoized to prevent re-animation on form state changes */}
+      <LoginHeader />
 
       {/*
        * FORM CARD: Professional modern style

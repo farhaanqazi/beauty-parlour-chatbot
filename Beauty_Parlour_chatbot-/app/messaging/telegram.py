@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import logging
 from typing import List
 
 import httpx
@@ -10,9 +9,7 @@ from app.core.config import Settings
 from app.db.models.salon import SalonChannel
 from app.messaging.base import DeliveryResult, MessagingTransport
 from app.schemas.messages import OutboundInstruction
-
-
-logger = logging.getLogger(__name__)
+from app.utils.logger import app_logger
 
 
 class TelegramTransport(MessagingTransport):
@@ -34,32 +31,63 @@ class TelegramTransport(MessagingTransport):
         """
         token = channel_config.provider_config.get("bot_token") or self.settings.telegram_bot_token
         if not token:
-            logger.warning("Telegram bot token not configured")
+            app_logger.warning("Telegram bot token not configured")
             return []
 
         deliveries: List[DeliveryResult] = []
         
-        # Send text message
+        # Send text message (with optional inline keyboard buttons)
         if instruction.text:
             url = f"https://api.telegram.org/bot{token}/sendMessage"
-            payload = {"chat_id": destination, "text": instruction.text}
+            payload: dict = {"chat_id": destination, "text": instruction.text}
+
+            # Add inline keyboard buttons if present
+            if instruction.buttons:
+                app_logger.info(f"Telegram sending message with {len(instruction.buttons)} buttons: {[btn['label'] for btn in instruction.buttons]}")
+                # Telegram expects buttons in rows: [[btn1, btn2], [btn3, btn4]]
+                # We'll put max 3 buttons per row
+                keyboard = []
+                row = []
+                for btn in instruction.buttons:
+                    row.append({"text": btn["label"], "callback_data": btn["callback"]})
+                    if len(row) >= 3:
+                        keyboard.append(row)
+                        row = []
+                if row:
+                    keyboard.append(row)
+
+                payload["reply_markup"] = {"inline_keyboard": keyboard}
+                app_logger.debug(f"Telegram button payload: {payload['reply_markup']}")
+            
             try:
                 response = await self.http_client.post(url, json=payload, timeout=10.0)
                 response.raise_for_status()
                 data = response.json()
+                
+                # Check Telegram API response status (even 200 OK can contain errors)
+                if not data.get("ok", False):
+                    error_desc = data.get("description", "Unknown error")
+                    app_logger.error(f"Telegram API error: {error_desc}")
+                    continue
+                
+                message_id = data.get("result", {}).get("message_id")
+                if not message_id:
+                    app_logger.error(f"Telegram API didn't return message_id in response: {data}")
+                    continue
+                
                 deliveries.append(
                     DeliveryResult(
-                        provider_message_id=str(data.get("result", {}).get("message_id")),
+                        provider_message_id=str(message_id),
                         text=instruction.text,
                         payload=payload,
                     )
                 )
             except httpx.HTTPStatusError as e:
-                logger.error(f"Telegram API error (status {e.response.status_code}): {e.response.text[:200]}")
+                app_logger.error(f"Telegram API error (status {e.response.status_code}): {e.response.text[:200]}")
             except httpx.TimeoutException as e:
-                logger.error(f"Telegram API timeout: {e}")
+                app_logger.error(f"Telegram API timeout: {e}")
             except Exception as e:
-                logger.error(f"Unexpected error sending Telegram message: {e}")
+                app_logger.error(f"Unexpected error sending Telegram message: {e}")
 
         # Send media (photos) - use gather for parallel sends
         if instruction.media_urls:
@@ -73,7 +101,7 @@ class TelegramTransport(MessagingTransport):
                 if isinstance(result, DeliveryResult):
                     deliveries.append(result)
                 elif isinstance(result, Exception):
-                    logger.error(f"Failed to send photo: {result}")
+                    app_logger.error(f"Failed to send photo: {result}")
         
         return deliveries
 
@@ -90,15 +118,27 @@ class TelegramTransport(MessagingTransport):
             response = await self.http_client.post(url, json=payload, timeout=10.0)
             response.raise_for_status()
             data = response.json()
+            
+            # Check Telegram API response status (even 200 OK can contain errors)
+            if not data.get("ok", False):
+                error_desc = data.get("description", "Unknown error")
+                app_logger.error(f"Telegram photo API error: {error_desc}")
+                return None
+            
+            message_id = data.get("result", {}).get("message_id")
+            if not message_id:
+                app_logger.error(f"Telegram photo API didn't return message_id in response: {data}")
+                return None
+            
             return DeliveryResult(
-                provider_message_id=str(data.get("result", {}).get("message_id")),
+                provider_message_id=str(message_id),
                 text=f"[photo] {media_url}",
                 payload=payload,
             )
         except httpx.HTTPStatusError as e:
-            logger.error(f"Telegram photo error (status {e.response.status_code}): {e.response.text[:200]}")
+            app_logger.error(f"Telegram photo error (status {e.response.status_code}): {e.response.text[:200]}")
         except httpx.TimeoutException as e:
-            logger.error(f"Telegram photo timeout: {e}")
+            app_logger.error(f"Telegram photo timeout: {e}")
         except Exception as e:
-            logger.error(f"Unexpected error sending photo: {e}")
+            app_logger.error(f"Unexpected error sending photo: {e}")
         return None

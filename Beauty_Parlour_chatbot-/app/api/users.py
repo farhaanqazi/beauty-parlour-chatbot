@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from slowapi import Limiter
+from slowapi.util import get_remote_address
 from sqlalchemy import select
 from sqlalchemy.orm import joinedload
 
@@ -12,6 +14,8 @@ from app.db.models.user import User
 from app.db.models.salon import Salon
 from typing import Optional
 
+# Strict rate limit on user creation: 5 per hour per IP
+_user_limiter = Limiter(key_func=get_remote_address, default_limits=["5 per hour"])
 
 router = APIRouter(tags=["users"])
 
@@ -102,8 +106,10 @@ async def get_user(
     }
 
 
+@_user_limiter.limit("5 per hour")
 @router.post("/users")
 async def create_user(
+    request: Request,
     email: str = Query(...),
     full_name: str = Query(...),
     role: str = Query(...),

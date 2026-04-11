@@ -9,29 +9,51 @@ from app.schemas.messages import NormalizedInboundMessage
 class WebhookService:
     @staticmethod
     def normalize_telegram_update(salon_slug: str, payload: dict[str, Any]) -> list[NormalizedInboundMessage]:
+        messages: list[NormalizedInboundMessage] = []
+        
+        # Handle regular text messages
         message = payload.get("message") or payload.get("edited_message")
-        if not message:
-            return []
-
-        text = message.get("text") or message.get("caption")
-        if not text:
-            return []
-
-        chat = message.get("chat", {})
-        display_name = " ".join(filter(None, [chat.get("first_name"), chat.get("last_name")])).strip() or None
-        external_user_id = str(chat.get("id"))
-        return [
-            NormalizedInboundMessage(
-                salon_slug=salon_slug,
-                channel=ChannelType.TELEGRAM,
-                external_user_id=external_user_id,
-                text=text,
-                raw_payload=payload,
-                provider_message_id=str(message.get("message_id")),
-                display_name=display_name,
-                telegram_chat_id=external_user_id,
+        if message:
+            text = message.get("text") or message.get("caption")
+            if text:
+                chat = message.get("chat", {})
+                display_name = " ".join(filter(None, [chat.get("first_name"), chat.get("last_name")])).strip() or None
+                external_user_id = str(chat.get("id"))
+                messages.append(
+                    NormalizedInboundMessage(
+                        salon_slug=salon_slug,
+                        channel=ChannelType.TELEGRAM,
+                        external_user_id=external_user_id,
+                        text=text,
+                        raw_payload=payload,
+                        provider_message_id=str(message.get("message_id")),
+                        display_name=display_name,
+                        telegram_chat_id=external_user_id,
+                    )
+                )
+        
+        # Handle inline button callback queries
+        callback_query = payload.get("callback_query")
+        if callback_query:
+            callback_data = callback_query.get("data", "")
+            chat = callback_query.get("message", {}).get("chat", {})
+            external_user_id = str(chat.get("id"))
+            display_name = " ".join(filter(None, [chat.get("first_name"), chat.get("last_name")])).strip() or None
+            
+            messages.append(
+                NormalizedInboundMessage(
+                    salon_slug=salon_slug,
+                    channel=ChannelType.TELEGRAM,
+                    external_user_id=external_user_id,
+                    text=callback_data,  # Button callback data becomes the message text
+                    raw_payload=payload,
+                    provider_message_id=str(callback_query.get("id")),
+                    display_name=display_name,
+                    telegram_chat_id=external_user_id,
+                )
             )
-        ]
+        
+        return messages
 
     @staticmethod
     def normalize_whatsapp_update(salon_slug: str, payload: dict[str, Any]) -> list[NormalizedInboundMessage]:

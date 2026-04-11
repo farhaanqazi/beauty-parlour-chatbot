@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { X, Loader2, Calendar, Clock, User, CheckCircle2 } from 'lucide-react';
+import { X, Loader2, Calendar, Clock, User, CheckCircle2, AlertCircle } from 'lucide-react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { fetchSalonServices } from '../../services/dashboardApi';
 import { useCreateAppointment } from '../../hooks/useAppointments';
@@ -14,6 +14,7 @@ interface NewAppointmentModalProps {
 interface CreateAppointmentPayload {
   salon_id: string;
   customer_id: string;
+  customer_name: string;
   service_id: string;
   appointment_at: string;
   notes?: string;
@@ -24,7 +25,6 @@ const NewAppointmentModal: React.FC<NewAppointmentModalProps> = ({ isOpen, onClo
   const createAppointment = useCreateAppointment();
 
   const [customerName, setCustomerName] = useState('');
-  const [customerId, setCustomerId] = useState('');
   const [serviceId, setServiceId] = useState('');
   const [date, setDate] = useState('');
   const [time, setTime] = useState('');
@@ -32,13 +32,39 @@ const NewAppointmentModal: React.FC<NewAppointmentModalProps> = ({ isOpen, onClo
   
   const [successMode, setSuccessMode] = useState(false);
 
+  // Auto-generate customer UUID when modal opens
+  const generateCustomerId = () => crypto.randomUUID();
+  const customerId = React.useMemo(() => isOpen ? generateCustomerId() : '', [isOpen]);
+
   // Fetch Services
-  const { data: services, isLoading: servicesLoading } = useQuery({
+  const { data: services, isLoading: servicesLoading, error: servicesError, refetch: refetchServices } = useQuery({
     queryKey: ['salonServices', salonId],
-    queryFn: () => fetchSalonServices(salonId!),
+    queryFn: async () => {
+      console.log('Fetching services for salonId:', salonId);
+      if (!salonId) {
+        console.error('No salonId provided to NewAppointmentModal');
+        return [];
+      }
+      const result = await fetchSalonServices(salonId);
+      console.log('Services fetched:', result);
+      return result;
+    },
     enabled: !!salonId && isOpen,
     staleTime: 300000, // 5 min
+    retry: 2,
   });
+
+  // Time validation helper
+  const isWithinBusinessHours = (timeStr: string): boolean => {
+    if (!timeStr) return true;
+    const [hours, minutes] = timeStr.split(':').map(Number);
+    const totalMinutes = hours * 60 + minutes;
+    const businessStart = 9 * 60; // 09:00
+    const businessEnd = 18 * 60;  // 18:00
+    return totalMinutes >= businessStart && totalMinutes <= businessEnd;
+  };
+
+  const showTimeWarning = time && !isWithinBusinessHours(time);
 
   const mutation = useMutation({
     mutationFn: (payload: CreateAppointmentPayload) => createAppointment.mutateAsync(payload),
@@ -56,7 +82,6 @@ const NewAppointmentModal: React.FC<NewAppointmentModalProps> = ({ isOpen, onClo
     onClose();
     setTimeout(() => {
       setCustomerName('');
-      setCustomerId('');
       setServiceId('');
       setDate('');
       setTime('');
@@ -83,6 +108,7 @@ const NewAppointmentModal: React.FC<NewAppointmentModalProps> = ({ isOpen, onClo
     mutation.mutate({
       salon_id: salonId,
       customer_id: customerId,
+      customer_name: customerName,
       service_id: serviceId,
       appointment_at: appointmentAt,
       notes: notes || undefined,
@@ -146,7 +172,7 @@ const NewAppointmentModal: React.FC<NewAppointmentModalProps> = ({ isOpen, onClo
                           required
                           value={customerName}
                           onChange={(e) => setCustomerName(e.target.value)}
-                          className="w-full pl-9 pr-4 py-2 bg-neutral-50 border border-neutral-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all"
+                          className="w-full pl-9 pr-4 py-2 bg-neutral-50 border border-neutral-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all text-neutral-900 placeholder-neutral-400"
                           placeholder="Jane Doe"
                         />
                       </div>
@@ -157,11 +183,10 @@ const NewAppointmentModal: React.FC<NewAppointmentModalProps> = ({ isOpen, onClo
                         <User className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-neutral-400" />
                         <input
                           type="text"
-                          required
+                          disabled
                           value={customerId}
-                          onChange={(e) => setCustomerId(e.target.value)}
-                          className="w-full pl-9 pr-4 py-2 bg-neutral-50 border border-neutral-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all"
-                          placeholder="Customer UUID"
+                          className="w-full pl-9 pr-4 py-2 bg-neutral-100 border border-neutral-200 rounded-xl text-neutral-500 cursor-not-allowed font-mono text-sm"
+                          placeholder="Auto-generated"
                         />
                       </div>
                     </div>
@@ -170,23 +195,30 @@ const NewAppointmentModal: React.FC<NewAppointmentModalProps> = ({ isOpen, onClo
                   {/* Service Selection */}
                   <div className="space-y-1.5">
                     <label className="text-sm font-medium text-neutral-700">Service</label>
-                    <select
-                      required
-                      value={serviceId}
-                      onChange={(e) => setServiceId(e.target.value)}
-                      className="w-full px-4 py-2 bg-neutral-50 border border-neutral-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all appearance-none"
-                    >
-                      <option value="" disabled>Select a service...</option>
-                      {servicesLoading ? (
-                        <option disabled>Loading services...</option>
-                      ) : (
-                        services?.map((svc) => (
-                          <option key={svc.id} value={svc.id}>
-                            {svc.name} - {svc.duration_minutes} min
-                          </option>
-                        ))
-                      )}
-                    </select>
+                    {servicesError ? (
+                      <div className="p-3 text-sm text-rose-600 bg-rose-50 border border-rose-200 rounded-xl">
+                        Failed to load services. Please refresh the page or contact support.
+                      </div>
+                    ) : (
+                      <select
+                        required
+                        value={serviceId}
+                        onChange={(e) => setServiceId(e.target.value)}
+                        disabled={servicesLoading}
+                        className="w-full px-4 py-2 bg-neutral-50 border border-neutral-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all appearance-none disabled:opacity-50 disabled:cursor-not-allowed text-neutral-900"
+                      >
+                        <option value="" disabled>Select a service...</option>
+                        {servicesLoading ? (
+                          <option disabled>Loading services...</option>
+                        ) : (
+                          services?.map((svc) => (
+                            <option key={svc.id} value={svc.id}>
+                              {svc.name} - {svc.duration_minutes} min
+                            </option>
+                          ))
+                        )}
+                      </select>
+                    )}
                   </div>
 
                   {/* Date & Time */}
@@ -200,7 +232,7 @@ const NewAppointmentModal: React.FC<NewAppointmentModalProps> = ({ isOpen, onClo
                           required
                           value={date}
                           onChange={(e) => setDate(e.target.value)}
-                          className="w-full pl-9 pr-4 py-2 bg-neutral-50 border border-neutral-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all"
+                          className="w-full pl-9 pr-4 py-2 bg-neutral-50 border border-neutral-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all text-neutral-900"
                         />
                       </div>
                     </div>
@@ -213,9 +245,15 @@ const NewAppointmentModal: React.FC<NewAppointmentModalProps> = ({ isOpen, onClo
                           required
                           value={time}
                           onChange={(e) => setTime(e.target.value)}
-                          className="w-full pl-9 pr-4 py-2 bg-neutral-50 border border-neutral-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all"
+                          className="w-full pl-9 pr-4 py-2 bg-neutral-50 border border-neutral-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all text-neutral-900"
                         />
                       </div>
+                      {showTimeWarning && (
+                        <p className="text-xs text-amber-600 flex items-center gap-1 mt-1">
+                          <AlertCircle className="w-3 h-3" />
+                          Outside business hours (09:00-18:00)
+                        </p>
+                      )}
                     </div>
                   </div>
 
@@ -226,7 +264,7 @@ const NewAppointmentModal: React.FC<NewAppointmentModalProps> = ({ isOpen, onClo
                       value={notes}
                       onChange={(e) => setNotes(e.target.value)}
                       rows={2}
-                      className="w-full px-4 py-2 bg-neutral-50 border border-neutral-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all resize-none"
+                      className="w-full px-4 py-2 bg-neutral-50 border border-neutral-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all resize-none text-neutral-900 placeholder-neutral-400"
                       placeholder="Customer preferences..."
                     />
                   </div>

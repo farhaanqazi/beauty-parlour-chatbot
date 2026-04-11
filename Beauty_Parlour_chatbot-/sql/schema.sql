@@ -25,6 +25,7 @@ BEGIN
         'pending',
         'confirmed',
         'cancelled_by_client',
+        'cancelled_by_user',
         'cancelled_by_salon',
         'cancelled_by_reception',
         'cancelled_closure',
@@ -40,6 +41,7 @@ BEGIN
     CREATE TYPE notification_job_type AS ENUM (
         'reminder_24h',
         'reminder_1h',
+        'reminder_15m',
         'salon_daily_digest',
         'salon_opening_digest',
         'salon_per_appointment',
@@ -74,6 +76,7 @@ ALTER TYPE channel_type ADD VALUE IF NOT EXISTS 'telegram';
 ALTER TYPE appointment_status ADD VALUE IF NOT EXISTS 'pending';
 ALTER TYPE appointment_status ADD VALUE IF NOT EXISTS 'confirmed';
 ALTER TYPE appointment_status ADD VALUE IF NOT EXISTS 'cancelled_by_client';
+ALTER TYPE appointment_status ADD VALUE IF NOT EXISTS 'cancelled_by_user';
 ALTER TYPE appointment_status ADD VALUE IF NOT EXISTS 'cancelled_by_salon';
 ALTER TYPE appointment_status ADD VALUE IF NOT EXISTS 'cancelled_by_reception';
 ALTER TYPE appointment_status ADD VALUE IF NOT EXISTS 'cancelled_closure';
@@ -82,6 +85,7 @@ ALTER TYPE appointment_status ADD VALUE IF NOT EXISTS 'no_show';
 
 ALTER TYPE notification_job_type ADD VALUE IF NOT EXISTS 'reminder_24h';
 ALTER TYPE notification_job_type ADD VALUE IF NOT EXISTS 'reminder_1h';
+ALTER TYPE notification_job_type ADD VALUE IF NOT EXISTS 'reminder_15m';
 ALTER TYPE notification_job_type ADD VALUE IF NOT EXISTS 'salon_daily_digest';
 ALTER TYPE notification_job_type ADD VALUE IF NOT EXISTS 'salon_opening_digest';
 ALTER TYPE notification_job_type ADD VALUE IF NOT EXISTS 'salon_per_appointment';
@@ -296,6 +300,7 @@ ALTER TABLE IF EXISTS appointments ADD COLUMN IF NOT EXISTS cancelled_by_user_id
 ALTER TABLE IF EXISTS appointments ADD COLUMN IF NOT EXISTS status_updated_at TIMESTAMPTZ NOT NULL DEFAULT now();
 
 ALTER TABLE IF EXISTS notification_jobs ADD COLUMN IF NOT EXISTS salon_id UUID;
+ALTER TABLE IF EXISTS notification_jobs ADD COLUMN IF NOT EXISTS locked_at TIMESTAMPTZ;
 
 -- Ensure new foreign keys and constraints exist
 DO $$

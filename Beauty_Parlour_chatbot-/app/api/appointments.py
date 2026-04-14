@@ -356,6 +356,7 @@ async def cancel_appointment(
     appointment_service = AppointmentService(db)
     appointment = await appointment_service.cancel_appointment(
         appointment_id=appointment_id,
+        salon_id=appointment.salon_id,
         reason=payload.reason,
         cancelled_by=payload.cancelled_by,
     )

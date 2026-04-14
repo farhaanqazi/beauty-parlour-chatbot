@@ -32,6 +32,8 @@ class FlowResult(BaseModel):
     messages: list[OutboundInstruction] = Field(default_factory=list)
     clear_state: bool = False
     should_create_appointment: bool = False
+    should_cancel_appointment: bool = False
+    should_update_appointment: bool = False
 
 
 class ProcessResult(BaseModel):

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from datetime import date, datetime, time, timedelta
 from typing import Any, Sequence
 from zoneinfo import ZoneInfo
@@ -7,8 +8,10 @@ from zoneinfo import ZoneInfo
 import dateparser
 
 from app.core.config import Settings
-from app.core.enums import ConversationStep
+from app.core.enums import ConversationStep, UserIntent
+from app.db.models.customer import Customer
 from app.db.models.salon import Salon, SalonService
+from app.db.models.appointment import Appointment
 from app.flows.definitions import NO_TOKENS, RESTART_TOKENS, RESET_TOKENS, YES_TOKENS, GREETING_TOKENS, build_flow_config
 from app.llm.service import LLMService
 from app.schemas.messages import FlowResult, OutboundInstruction
@@ -16,9 +19,29 @@ from app.schemas.state import ConversationState
 
 
 class ConversationEngine:
-    def __init__(self, llm_service: LLMService, settings: Settings) -> None:
+    # Map language names to ISO 639-1 codes for dateparser
+    LANG_ISO_MAP = {
+        'english': 'en', 'hinglish': 'en', 'hindi': 'hi', 'telugu': 'te',
+        'spanish': 'es', 'french': 'fr', 'german': 'de', 'arabic': 'ar',
+        'urdu': 'ur', 'tamil': 'ta', 'bengali': 'bn', 'punjabi': 'pa',
+    }
+
+    def __init__(
+        self,
+        llm_service: LLMService,
+        settings: Settings,
+        appointment_service: Any | None = None,
+    ) -> None:
         self.llm_service = llm_service
         self.settings = settings
+        self.appointment_service = appointment_service
+
+    @staticmethod
+    def _advance_step(state: ConversationState, new_step: ConversationStep) -> None:
+        """Advance to a new step and reset attempt_count for the new question."""
+        state.previous_step = state.step
+        state.step = new_step
+        state.attempt_count = 0  # Reset strike counter for the new question
 
     async def process_message(
         self,
@@ -26,6 +49,7 @@ class ConversationEngine:
         message_text: str,
         salon: Salon,
         services: Sequence[SalonService],
+        customer: Customer | None = None,
     ) -> tuple[FlowResult, bool]:
         """
         Process an incoming message and return the flow result.
@@ -74,27 +98,142 @@ class ConversationEngine:
                 if cleaned_text.casefold() not in GREETING_TOKENS:
                     return FlowResult(
                         state=state,
-                        messages=[OutboundInstruction(text="Please type 'Hi' to begin the booking process.")],
+                        messages=[OutboundInstruction(text="Please type 'Hi' to begin.")],
                     ), state_was_reset
-                # Got the greeting, clear the flag
+                # Got the greeting, clear the flag and show main menu
                 state.awaiting_greeting = False
 
-            state.step = ConversationStep.LANGUAGE
-            # Combine greeting and language prompt into ONE message with buttons
+            self._advance_step(state, ConversationStep.MAIN_MENU)
             greeting_text = flow_config["greeting"].format(salon_name=salon.name)
-            language_prompt = "Choose your language:"
-            # Create buttons for languages
-            lang_buttons = [{"label": lang["label"], "callback": f"lang_{lang['id']}"} for lang in flow_config["languages"]]
-            lang_buttons.append({"label": "🔄 Start Over", "callback": "restart_flow"})
             return FlowResult(
                 state=state,
                 messages=[
                     OutboundInstruction(
-                        text=f"{greeting_text}\n\n{language_prompt}",
-                        buttons=lang_buttons,
+                        text=f"{greeting_text}\n\nWhat would you like to do?",
+                        buttons=[
+                            {"label": "📅 Book New Appointment", "callback": "action_book_new"},
+                            {"label": "🔍 Manage Existing Appointment", "callback": "action_manage_existing"},
+                            {"label": "🔄 Start Over", "callback": "restart_flow"},
+                        ],
                     ),
                 ],
             ), state_was_reset
+
+        if state.step == ConversationStep.MAIN_MENU:
+            # Route based on user's choice
+            if cleaned_text == "action_book_new":
+                state.intent = UserIntent.NEW_BOOKING
+                self._advance_step(state, ConversationStep.LANGUAGE)
+                language_prompt = "Choose your language:"
+                lang_buttons = [{"label": lang["label"], "callback": f"lang_{lang['id']}"} for lang in flow_config["languages"]]
+                lang_buttons.append({"label": "🔄 Start Over", "callback": "restart_flow"})
+                return FlowResult(
+                    state=state,
+                    messages=[
+                        OutboundInstruction(
+                            text=language_prompt,
+                            buttons=lang_buttons,
+                        ),
+                    ],
+                ), state_was_reset
+
+            elif cleaned_text == "action_manage_existing":
+                state.intent = UserIntent.MANAGE_BOOKING
+                self._advance_step(state, ConversationStep.MANAGE_APPOINTMENT_MENU)
+                # Let conversation_service handle the lookup — we just signal the intent
+                # Return a special FlowResult that tells the caller to look up appointments
+                return FlowResult(
+                    state=state,
+                    messages=[
+                        OutboundInstruction(text="__LOOKUP_APPOINTMENTS__"),
+                    ],
+                ), state_was_reset
+
+            else:
+                # Unrecognized input — show main menu again
+                return FlowResult(
+                    state=state,
+                    messages=[
+                        OutboundInstruction(
+                            text="Please choose an option:",
+                            buttons=[
+                                {"label": "📅 Book New Appointment", "callback": "action_book_new"},
+                                {"label": "🔍 Manage Existing Appointment", "callback": "action_manage_existing"},
+                            ],
+                        ),
+                    ],
+                ), state_was_reset
+
+        if state.step == ConversationStep.MANAGE_APPOINTMENT_MENU:
+            # Handle action buttons for the displayed appointment
+            if cleaned_text == "action_reschedule":
+                # Pre-fill date/time from the target appointment and jump to date selection
+                self._advance_step(state, ConversationStep.APPOINTMENT_DATE)
+                state.previous_step = ConversationStep.MANAGE_APPOINTMENT_MENU
+                # Date and time are already pre-filled from the appointment
+                today = datetime.now(ZoneInfo(salon.timezone)).date()
+                date_buttons = []
+                for i in range(7):
+                    target_date = today + timedelta(days=i)
+                    if i == 0:
+                        label = "Today"
+                    elif i == 1:
+                        label = "Tomorrow"
+                    else:
+                        label = target_date.strftime("%a %d %b")
+                    date_buttons.append({"label": label, "callback": f"date_{target_date.isoformat()}"})
+                date_buttons.append({"label": "⬅️ Back", "callback": "go_back"})
+                date_buttons.append({"label": "🔄 Start Over", "callback": "restart_flow"})
+                return FlowResult(
+                    state=state,
+                    messages=[
+                        OutboundInstruction(
+                            text="Let's pick a new date for your appointment.\n💡 Or type your preferred date (e.g. next Friday, 25/04/2026)",
+                            buttons=date_buttons,
+                        )
+                    ],
+                ), state_was_reset
+
+            elif cleaned_text == "action_cancel":
+                # Ask for cancellation confirmation
+                self._advance_step(state, ConversationStep.CONFIRMATION)
+                return FlowResult(
+                    state=state,
+                    messages=[
+                        OutboundInstruction(
+                            text="Are you sure you want to cancel this appointment?",
+                            buttons=[
+                                {"label": "✅ YES, Cancel", "callback": "confirm_yes"},
+                                {"label": "❌ NO, Keep it", "callback": "confirm_no"},
+                                {"label": "🔄 Start Over", "callback": "restart_flow"},
+                            ],
+                        )
+                    ],
+                ), state_was_reset
+
+            elif cleaned_text == "action_keep":
+                return FlowResult(
+                    state=state,
+                    messages=[OutboundInstruction(text="Great! Your appointment is confirmed. Reply HI anytime if you need anything else.")],
+                    clear_state=True,
+                ), state_was_reset
+
+            else:
+                # Show action buttons again
+                return FlowResult(
+                    state=state,
+                    messages=[
+                        OutboundInstruction(
+                            text="What would you like to do?",
+                            buttons=[
+                                {"label": "🔄 Reschedule", "callback": "action_reschedule"},
+                                {"label": "❌ Cancel", "callback": "action_cancel"},
+                                {"label": "✅ Keep as is", "callback": "action_keep"},
+                                {"label": "🔄 Start Over", "callback": "restart_flow"},
+                            ],
+                        )
+                    ],
+                ), state_was_reset
 
         if state.step == ConversationStep.LANGUAGE:
             language = await self._resolve_choice(
@@ -110,7 +249,7 @@ class ConversationEngine:
                 return result, state_was_reset
             # Acknowledge language choice, then move to NAME collection
             state.slots.language = language["id"]
-            state.step = ConversationStep.CUSTOMER_NAME
+            self._advance_step(state, ConversationStep.CUSTOMER_NAME)
             return FlowResult(
                 state=state,
                 messages=[
@@ -127,7 +266,7 @@ class ConversationEngine:
                 return result, state_was_reset
             
             state.slots.customer_name = name
-            state.step = ConversationStep.SERVICE
+            self._advance_step(state, ConversationStep.SERVICE)
             # Create buttons for services
             service_buttons = [{"label": svc.name, "callback": f"svc_{svc.id}"} for svc in services]
             service_buttons.append({"label": "🔄 Start Over", "callback": "restart_flow"})
@@ -157,8 +296,7 @@ class ConversationEngine:
             state.slots.service_id = str(service.id)
             state.slots.service_name = service.name
             # Skip sample images, go directly to date selection with quick date buttons
-            state.previous_step = ConversationStep.SERVICE
-            state.step = ConversationStep.APPOINTMENT_DATE
+            self._advance_step(state, ConversationStep.APPOINTMENT_DATE)
             today = datetime.now(ZoneInfo(salon.timezone)).date()
             # Show next 7 days for better user experience
             date_buttons = []
@@ -192,7 +330,7 @@ class ConversationEngine:
                 )
                 return result, state_was_reset
             state.slots.wants_sample_images = wants_samples
-            state.step = ConversationStep.APPOINTMENT_DATE
+            self._advance_step(state, ConversationStep.APPOINTMENT_DATE)
             selected_service = self._find_service_by_id(services, state.slots.service_id)
             instructions: list[OutboundInstruction] = []
             if wants_samples and selected_service and selected_service.sample_image_urls:
@@ -218,14 +356,39 @@ class ConversationEngine:
                 except ValueError:
                     appointment_date = None
             else:
-                appointment_date = await self._parse_date(cleaned_text, salon.timezone, state.slots.language)
+                # Pre-check: Reject time-like inputs during date selection
+                # e.g., "5.30", "5:30", "5pm", "17:30" are clearly times, not dates
+                time_like_pattern = re.match(
+                    r'^\d{1,2}[\.:]\d{1,2}$|^\d{1,2}\s*(am|pm)$|^[\d]{1,2}:$|^\d{1,2}\.$',
+                    cleaned_text.lower().strip()
+                )
+                if time_like_pattern:
+                    appointment_date = None  # Force rejection - it's a time, not a date
+                else:
+                    appointment_date = await self._parse_date(cleaned_text, salon.timezone, state.slots.language)
 
             if not appointment_date:
                 # First, check if this is a FAQ question (LLM fallback)
                 faq_result = await self._handle_faq_fallback(cleaned_text, ConversationStep.APPOINTMENT_DATE, salon)
                 if faq_result:
                     return faq_result, state_was_reset
-                
+
+                # Check if user typed a time-like input during date selection
+                time_like_check = re.match(
+                    r'^\d{1,2}[\.:]\d{1,2}$|^\d{1,2}\s*(am|pm)$|^[\d]{1,2}:$|^\d{1,2}\.$',
+                    cleaned_text.lower().strip()
+                )
+                if time_like_check:
+                    # User typed a time when we're asking for a date
+                    result, _ = self._invalid_reply(state, (
+                        f"That looks like a time (**{cleaned_text}**), but I need a **date** first.\n\n"
+                        "Please pick a date (e.g. **tomorrow**, **next Friday**, **25 April**), then I'll ask for the time."
+                    ))
+                    result.messages[0].buttons = [
+                        {"label": "🔄 Start Over", "callback": "restart_flow"}
+                    ]
+                    return result, state_was_reset
+
                 # Graceful degradation: Show increasingly helpful examples
                 # Note: _invalid_reply increments attempt_count, so check current value
                 if state.attempt_count == 0:
@@ -261,14 +424,13 @@ class ConversationEngine:
                 return result, state_was_reset
             
             # --- Validate 3-month advance booking limit HERE (not at confirmation) ---
-            from datetime import timedelta as td
-            max_booking_date = datetime.now(ZoneInfo(salon.timezone)).date() + td(days=90)
+            max_booking_date = datetime.now(ZoneInfo(salon.timezone)).date() + timedelta(days=90)
             if appointment_date > max_booking_date:
                 # Date is too far in the future - show error and date buttons immediately
                 today = datetime.now(ZoneInfo(salon.timezone)).date()
                 date_buttons = []
                 for i in range(7):
-                    target_date = today + td(days=i)
+                    target_date = today + timedelta(days=i)
                     if i == 0:
                         label = "Today"
                     elif i == 1:
@@ -289,9 +451,7 @@ class ConversationEngine:
                 ), state_was_reset
             
             state.slots.appointment_date = appointment_date
-            state.previous_step = ConversationStep.APPOINTMENT_DATE
-            # NEW: Go to DATE_CONFIRMATION step instead of directly to time selection
-            state.step = ConversationStep.DATE_CONFIRMATION
+            self._advance_step(state, ConversationStep.DATE_CONFIRMATION)
             
             # Format the date nicely for confirmation
             formatted_date = appointment_date.strftime("%A, %d %b %Y")
@@ -313,11 +473,12 @@ class ConversationEngine:
             # Handle confirmation response
             if cleaned_text == "date_confirm_yes":
                 # User confirmed the date, proceed to time selection
-                state.step = ConversationStep.APPOINTMENT_TIME
+                self._advance_step(state, ConversationStep.APPOINTMENT_TIME)
             elif cleaned_text == "date_confirm_no":
                 # User wants to change date, go back to date selection
                 state.step = ConversationStep.APPOINTMENT_DATE
                 state.slots.appointment_date = None
+                state.attempt_count = 0  # Reset for the new attempt
             else:
                 # Check if user typed a date-like input (wants to change date)
                 # Patterns: "17 may", "25/04", "next monday", "tomorrow", etc.
@@ -338,7 +499,6 @@ class ConversationEngine:
                 
                 if date_like:
                     # User provided a new date, parse it immediately and show confirmation
-                    from datetime import timedelta as td
                     appointment_date = await self._parse_date(cleaned_text, salon.timezone, state.slots.language)
                     
                     if not appointment_date:
@@ -356,14 +516,14 @@ class ConversationEngine:
                         ), state_was_reset
                     
                     # Validate 3-month advance booking limit
-                    max_booking_date = datetime.now(ZoneInfo(salon.timezone)).date() + td(days=90)
+                    max_booking_date = datetime.now(ZoneInfo(salon.timezone)).date() + timedelta(days=90)
                     if appointment_date > max_booking_date:
                         state.step = ConversationStep.APPOINTMENT_DATE
                         state.slots.appointment_date = None
                         today = datetime.now(ZoneInfo(salon.timezone)).date()
                         date_buttons = []
                         for i in range(7):
-                            target_date = today + td(days=i)
+                            target_date = today + timedelta(days=i)
                             if i == 0:
                                 label = "Today"
                             elif i == 1:
@@ -385,8 +545,7 @@ class ConversationEngine:
                     
                     # Save and show confirmation
                     state.slots.appointment_date = appointment_date
-                    state.previous_step = ConversationStep.APPOINTMENT_DATE
-                    state.step = ConversationStep.DATE_CONFIRMATION
+                    self._advance_step(state, ConversationStep.DATE_CONFIRMATION)
                     
                     formatted_date = appointment_date.strftime("%A, %d %b %Y")
                     return FlowResult(
@@ -405,10 +564,11 @@ class ConversationEngine:
                     # Try to resolve as yes/no
                     confirmation = await self._resolve_yes_no(cleaned_text, state.slots.language)
                     if confirmation is True:
-                        state.step = ConversationStep.APPOINTMENT_TIME
+                        self._advance_step(state, ConversationStep.APPOINTMENT_TIME)
                     elif confirmation is False:
                         state.step = ConversationStep.APPOINTMENT_DATE
                         state.slots.appointment_date = None
+                        state.attempt_count = 0
                         return FlowResult(
                             state=state,
                             messages=[
@@ -501,6 +661,16 @@ class ConversationEngine:
                     messages=[OutboundInstruction(text="Please share the appointment date first.")],
                 ), state_was_reset
 
+            # Define date-like patterns (used for pre-check AND error messages)
+            date_like_patterns = [
+                r'^(today|tomorrow|yesterday)$',
+                r'^next\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday|week)',
+                r'^\d{1,2}[/\-]\d{1,2}([/\-]\d{2,4})?$',  # "25/04", "25-04-2026"
+                r'^(mon|tue|wed|thu|fri|sat|sun)\s+\d{1,2}',  # "mon 14", "friday 25"
+                r'^\d{1,2}\s+(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)',  # "25 april"
+                r'^(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\s+\d{1,2}',  # "april 25"
+            ]
+
             # Handle button callback (time_HH:MM format)
             if cleaned_text.startswith("time_"):
                 time_str = cleaned_text.replace("time_", "")
@@ -509,19 +679,37 @@ class ConversationEngine:
                 except ValueError:
                     appointment_time = None
             else:
-                appointment_time = await self._parse_time(
-                    cleaned_text,
-                    salon.timezone,
-                    state.slots.appointment_date,
-                    state.slots.language,
-                )
+                # Pre-check: Reject date-like inputs during time selection
+                is_date_like = any(re.match(p, cleaned_text.lower().strip()) for p in date_like_patterns)
+                if is_date_like:
+                    appointment_time = None  # Force rejection - it's a date, not a time
+                else:
+                    appointment_time = await self._parse_time(
+                        cleaned_text,
+                        salon.timezone,
+                        state.slots.appointment_date,
+                        state.slots.language,
+                    )
             
             if not appointment_time:
                 # First, check if this is a FAQ question (LLM fallback)
                 faq_result = await self._handle_faq_fallback(cleaned_text, ConversationStep.APPOINTMENT_TIME, salon)
                 if faq_result:
                     return faq_result, state_was_reset
-                
+
+                # Check if user typed a date-like input during time selection
+                date_like_check = any(re.match(p, cleaned_text.lower().strip()) for p in date_like_patterns)
+                if date_like_check:
+                    # User typed a date when we're asking for a time
+                    result, _ = self._invalid_reply(state, (
+                        f"That looks like a date (**{cleaned_text}**), but I need a **time**.\n\n"
+                        "Please pick a time (e.g. **5pm**, **17:30**, **5.30**)."
+                    ))
+                    result.messages[0].buttons = [
+                        {"label": "🔄 Start Over", "callback": "restart_flow"}
+                    ]
+                    return result, state_was_reset
+
                 # Graceful degradation: Show increasingly helpful examples
                 # Note: _invalid_reply increments attempt_count, so check current value
                 if state.attempt_count == 0:
@@ -573,10 +761,7 @@ class ConversationEngine:
 
             # Save the time temporarily for confirmation
             state.slots.appointment_time = appointment_time
-            state.previous_step = ConversationStep.APPOINTMENT_TIME
-            
-            # NEW: Go to TIME_CONFIRMATION step
-            state.step = ConversationStep.TIME_CONFIRMATION
+            self._advance_step(state, ConversationStep.TIME_CONFIRMATION)
             
             # Format the time nicely for confirmation
             formatted_time = appointment_time.strftime("%I:%M %p").lstrip('0')
@@ -597,12 +782,26 @@ class ConversationEngine:
         if state.step == ConversationStep.TIME_CONFIRMATION:
             # Handle confirmation response
             if cleaned_text == "time_confirm_yes":
-                # User confirmed the time, proceed to next step (Email or Confirmation)
-                state.step = ConversationStep.EMAIL
+                # For rescheduling: skip email step, go straight to update
+                if state.intent == UserIntent.MANAGE_BOOKING and state.target_appointment_id:
+                    self._advance_step(state, ConversationStep.COMPLETE)
+                    state.is_complete = True
+                    return FlowResult(state=state, should_update_appointment=True, clear_state=True), state_was_reset
+                # Normal booking: proceed to email
+                self._advance_step(state, ConversationStep.EMAIL)
             elif cleaned_text == "time_confirm_no":
                 # User wants to change time, go back to time selection
                 state.step = ConversationStep.APPOINTMENT_TIME
                 state.slots.appointment_time = None
+                state.attempt_count = 0
+                return FlowResult(
+                    state=state,
+                    messages=[
+                        OutboundInstruction(
+                            text="No problem! Let's pick a different time.",
+                        )
+                    ],
+                ), state_was_reset
             else:
                 # Check if user typed a time-like input (wants to change time)
                 # Patterns: "5.30", "5:30", "5 PM", "17:30", etc.
@@ -658,8 +857,7 @@ class ConversationEngine:
                     
                     # Save and show confirmation
                     state.slots.appointment_time = appointment_time
-                    state.previous_step = ConversationStep.APPOINTMENT_TIME
-                    state.step = ConversationStep.TIME_CONFIRMATION
+                    self._advance_step(state, ConversationStep.TIME_CONFIRMATION)
                     
                     formatted_time = appointment_time.strftime("%I:%M %p").lstrip('0')
                     return FlowResult(
@@ -676,12 +874,18 @@ class ConversationEngine:
                     ), state_was_reset
                 else:
                     # Try to resolve as yes/no
-                    confirmation = await self._resolve_yes_no(cleaned_text, state.slots.language)
+                    try:
+                        confirmation = await self._resolve_yes_no(cleaned_text, state.slots.language)
+                    except Exception:
+                        # LLM failed - don't crash, just ask user to use buttons
+                        confirmation = None
+                    
                     if confirmation is True:
-                        state.step = ConversationStep.EMAIL
+                        self._advance_step(state, ConversationStep.EMAIL)
                     elif confirmation is False:
                         state.step = ConversationStep.APPOINTMENT_TIME
                         state.slots.appointment_time = None
+                        state.attempt_count = 0
                         return FlowResult(
                             state=state,
                             messages=[
@@ -719,8 +923,7 @@ class ConversationEngine:
                 return result, state_was_reset
             
             state.slots.email = email
-            state.step = ConversationStep.CONFIRMATION
-            state.previous_step = ConversationStep.EMAIL
+            self._advance_step(state, ConversationStep.CONFIRMATION)
             return FlowResult(
                 state=state,
                 messages=[
@@ -769,8 +972,11 @@ class ConversationEngine:
                     messages=[OutboundInstruction(text="Appointment request cancelled. Reply HI whenever you want to start again.")],
                     clear_state=True,
                 ), state_was_reset
-            state.step = ConversationStep.COMPLETE
+            self._advance_step(state, ConversationStep.COMPLETE)
             state.is_complete = True
+            # Check if this is a cancellation (manage intent) or a new booking
+            if state.intent == UserIntent.MANAGE_BOOKING and state.target_appointment_id:
+                return FlowResult(state=state, should_cancel_appointment=True, clear_state=True), state_was_reset
             return FlowResult(state=state, should_create_appointment=True, clear_state=True), state_was_reset
 
         return FlowResult(
@@ -864,23 +1070,22 @@ class ConversationEngine:
     async def _parse_date(self, message_text: str, timezone_name: str, language_hint: str | None) -> date | None:
         """Parse date using dateparser library - handles natural language like 'first saturday of june'."""
         today = datetime.now(ZoneInfo(timezone_name)).date()
-        
-        # Use dateparser for natural language date parsing
-        # PREFER_CURRENT_DATE: If user types just "June", assume current year
-        # DATE_ORDER: dayfirst=True for DD/MM format
+        lang_code = self.LANG_ISO_MAP.get((language_hint or '').lower())
+
         parsed = dateparser.parse(
             message_text,
             settings={
-                'PREFER_DATES_FROM': 'future',  # Prefer future dates when ambiguous
-                'DATE_ORDER': 'DMY',  # Day/Month/Year order
+                'PREFER_DATES_FROM': 'future',
+                'DATE_ORDER': 'DMY',
                 'RETURN_AS_TIMEZONE_AWARE': False,
+                'RELATIVE_BASE': datetime.now(ZoneInfo(timezone_name)),
             },
-            languages=[language_hint] if language_hint else None,
+            languages=[lang_code] if lang_code else None,
         )
-        
+
         if not parsed:
             return None
-        
+
         result_date = parsed.date() if hasattr(parsed, 'date') else parsed
         return result_date if result_date >= today else None
 
@@ -892,32 +1097,115 @@ class ConversationEngine:
         language_hint: str | None,
     ) -> time | None:
         """Parse time using dateparser library - handles natural language like 'half past 5', 'evening', etc."""
-        # Try dateparser first - handles "5pm", "17:30", "half past 3", "afternoon", etc.
-        parsed = dateparser.parse(
-            message_text,
-            settings={
-                'PREFER_DATES_FROM': 'current',  # Don't shift dates
-                'RETURN_AS_TIMEZONE_AWARE': False,
-            },
-            languages=[language_hint] if language_hint else None,
-        )
-        
-        if parsed:
-            # Extract just the time component
-            return parsed.time()
-        
-        # Fallback: Single digit (1-12) - assume PM in booking context - e.g., "3", "10"
-        # Only if it's purely numeric with no other context
-        import re
         cleaned = message_text.strip().lower()
+
+        # Pre-check 0: Relative time expressions
+        # e.g., "8 minutes after 7" → 7:08, "7 minutes before 8" → 7:53
+        # "quarter after 5" → 5:15, "half past 3" → 3:30
+        # dateparser misinterprets these, so we handle them explicitly.
+        rel_match = re.match(
+            r'^(\d{1,2})\s*minutes?\s+(?:after|past)\s+(\d{1,2})$',
+            cleaned,
+        )
+        if rel_match:
+            minutes = int(rel_match.group(1))
+            hour = int(rel_match.group(2))
+            if 1 <= hour <= 12 and 0 <= minutes <= 59:
+                return time(hour + 12, minutes)
+            elif 13 <= hour <= 23 and 0 <= minutes <= 59:
+                return time(hour, minutes)
+
+        rel_match = re.match(
+            r'^(\d{1,2})\s*minutes?\s+before\s+(\d{1,2})$',
+            cleaned,
+        )
+        if rel_match:
+            minutes = int(rel_match.group(1))
+            hour = int(rel_match.group(2))
+            if 1 <= hour <= 12 and 0 <= minutes <= 59:
+                total = hour * 60 + 12 * 60 - minutes  # PM
+                h, m = divmod(total, 60)
+                return time(h, m)
+            elif 13 <= hour <= 23 and 0 <= minutes <= 59:
+                total = hour * 60 - minutes
+                h, m = divmod(total, 60)
+                return time(h, m)
+
+        # Handle "quarter after X" → X:15
+        rel_match = re.match(r'^quarter\s+(?:after|past)\s+(\d{1,2})$', cleaned)
+        if rel_match:
+            hour = int(rel_match.group(1))
+            if 1 <= hour <= 12:
+                return time(hour + 12, 15)
+
+        # Handle "half past X" → X:30
+        rel_match = re.match(r'^half\s+past\s+(\d{1,2})$', cleaned)
+        if rel_match:
+            hour = int(rel_match.group(1))
+            if 1 <= hour <= 12:
+                return time(hour + 12, 30)
+
+        # Pre-check 1: Dot-separated time formats (H.M, HH.MM, etc.)
+        # e.g., "3.3" → 15:03, "5.30" → 17:30, "9.15" → 21:15
+        # dateparser misinterprets these as dates (March 3rd), so we handle them first
+        match = re.match(r'^(\d{1,2})\.(\d{1,2})$', cleaned)
+        if match:
+            hour, minute = int(match.group(1)), int(match.group(2))
+            if 0 <= hour <= 23 and 0 <= minute <= 59:
+                # In booking context, hours 1-12 = PM
+                if 1 <= hour <= 12:
+                    hour += 12
+                return time(hour, minute)
+
+        # Pre-check 2: Colon-separated time (H:MM, HH:MM)
+        match = re.match(r'^(\d{1,2}):(\d{1,2})$', cleaned)
+        if match:
+            hour, minute = int(match.group(1)), int(match.group(2))
+            if 0 <= hour <= 23 and 0 <= minute <= 59:
+                return time(hour, minute)
+
+        # Pre-check 3: Hour with AM/PM
+        match = re.match(r'^(\d{1,2})\s*(am|pm)$', cleaned)
+        if match:
+            hour = int(match.group(1))
+            period = match.group(2)
+            if period == 'pm' and hour != 12:
+                hour += 12
+            elif period == 'am' and hour == 12:
+                hour = 0
+            if 0 <= hour <= 23:
+                return time(hour, 0)
+
+        # Pre-check 4: Single digit (1-12) - assume PM
         match = re.match(r'^(\d{1,2})$', cleaned)
         if match:
             hour = int(match.group(1))
             if 1 <= hour <= 12:
-                return time(hour + 12, 0)  # Assume PM
+                return time(hour + 12, 0)
             elif 13 <= hour <= 23:
                 return time(hour, 0)
-        
+
+        # Fallback: dateparser for natural language like "evening", "3 pm"
+        # NOTE: relative expressions like "8 minutes after 7" are handled
+        # by pre-checks above. dateparser only handles what's left.
+        lang_code = self.LANG_ISO_MAP.get((language_hint or '').lower())
+
+        # Provide a relative base so dateparser can resolve "tonight", "evening" etc.
+        now = datetime.now(ZoneInfo(timezone_name))
+
+        parsed = dateparser.parse(
+            message_text,
+            settings={
+                'PREFER_DATES_FROM': 'future',
+                'RETURN_AS_TIMEZONE_AWARE': False,
+                'RELATIVE_BASE': now,
+            },
+            languages=[lang_code] if lang_code else None,
+        )
+
+        if parsed:
+            return parsed.time()
+
         return None
 
     @staticmethod
@@ -949,6 +1237,18 @@ class ConversationEngine:
         if not self.llm_service.client:
             return None  # LLM not available, skip FAQ check
         
+        # Filter out single-character, punctuation-only, or very short inputs
+        # e.g., "?", ".", "!!", "ok", "yes", "no" are not FAQs
+        stripped = message_text.strip()
+        if len(stripped) <= 1:
+            return None  # Too short to be a real question
+        if re.match(r'^[?!,.]+$', stripped):
+            return None  # Just punctuation
+        if stripped.lower() in {'ok', 'okay', 'yes', 'no', 'sure', 'yeah', 'yep', 'nah'}:
+            return None  # Common conversational tokens, not FAQs
+        if len(stripped.split()) == 1 and stripped.lower() in {'help', 'hello', 'hi', 'hey'}:
+            return None  # Greetings, not FAQs
+
         # Ask LLM to classify: is this a FAQ or gibberish?
         classification = await self.llm_service._json_completion(
             system_prompt=(

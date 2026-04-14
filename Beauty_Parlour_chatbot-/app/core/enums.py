@@ -27,8 +27,15 @@ class AppointmentStatus(str, Enum):
     NO_SHOW = "no_show"
 
 
+class UserIntent(str, Enum):
+    NEW_BOOKING = "new_booking"
+    MANAGE_BOOKING = "manage_booking"
+
+
 class ConversationStep(str, Enum):
     GREETING = "greeting"
+    MAIN_MENU = "main_menu"
+    MANAGE_APPOINTMENT_MENU = "manage_appointment_menu"
     LANGUAGE = "language"
     CUSTOMER_NAME = "customer_name"
     MARRIAGE_TYPE = "marriage_type"

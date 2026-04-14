@@ -5,7 +5,7 @@ from uuid import uuid4
 
 from pydantic import BaseModel, Field
 
-from app.core.enums import ChannelType, ConversationStep
+from app.core.enums import ChannelType, ConversationStep, UserIntent
 
 
 class ConversationSlots(BaseModel):
@@ -25,6 +25,8 @@ class ConversationState(BaseModel):
     salon_id: str
     channel: ChannelType
     external_user_id: str
+    intent: UserIntent = UserIntent.NEW_BOOKING
+    target_appointment_id: str | None = None
     step: ConversationStep = ConversationStep.GREETING
     previous_step: ConversationStep | None = None
     awaiting_greeting: bool = False

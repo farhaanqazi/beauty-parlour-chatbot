@@ -189,16 +189,24 @@ class LLMService:
     async def _json_completion(self, system_prompt: str, user_prompt: str) -> dict[str, Any] | None:
         if not self.client:
             return None
-        response = await self.client.chat.completions.create(
-            model=self.settings.llm_model,
-            temperature=0,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
-        )
-        content = response.choices[0].message.content or "{}"
         try:
-            return json.loads(content)
-        except json.JSONDecodeError:
-            return None
+            import asyncio
+            response = await asyncio.wait_for(
+                self.client.chat.completions.create(
+                    model=self.settings.llm_model,
+                    temperature=0,
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_prompt},
+                    ],
+                    timeout=10,  # 10 second timeout
+                ),
+                timeout=12,  # Slightly longer outer timeout for safety
+            )
+            content = response.choices[0].message.content or "{}"
+            try:
+                return json.loads(content)
+            except json.JSONDecodeError:
+                return None
+        except asyncio.TimeoutError:
+            return None  # LLM timed out, gracefully degrade

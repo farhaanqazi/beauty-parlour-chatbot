@@ -1,13 +1,16 @@
 from __future__ import annotations
-from datetime import datetime, timedelta
+
+from datetime import date, datetime, time, timedelta
+from typing import TYPE_CHECKING
 from uuid import UUID, uuid4
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import Select, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import joinedload
+from sqlalchemy.orm import joinedload, selectinload
 
-from app.core.enums import AppointmentStatus, NotificationJobType
+from app.core.enums import AppointmentStatus, NotificationJobStatus, NotificationJobType
 from app.db.models.appointment import Appointment, NotificationJob
 from app.db.models.customer import Customer
 from app.db.models.salon import Salon, SalonService
@@ -16,11 +19,22 @@ from app.schemas.state import ConversationState
 from app.services.email_service import EmailService
 from app.utils.logger import app_logger
 
+if TYPE_CHECKING:
+    pass
+
+
+# Default service duration (minutes) when the associated service record is missing
+DEFAULT_DURATION_MINUTES = 60
+
 
 class AppointmentService:
     def __init__(self, db: AsyncSession, email_service: EmailService | None = None) -> None:
         self.db = db
         self.email_service = email_service
+
+    # ------------------------------------------------------------------
+    # CREATE
+    # ------------------------------------------------------------------
 
     async def create_appointment(
         self,
@@ -81,8 +95,8 @@ class AppointmentService:
                 # --- Business hours validation ---
                 self._validate_business_hours(appointment_at, salon)
 
-                # --- Availability / conflict checking ---
-                overlap = await self._check_availability(salon.id, appointment_at, service)
+                # --- Availability / conflict checking with row-level lock ---
+                overlap = await self._check_availability_locked(salon.id, appointment_at, service)
                 if overlap:
                     app_logger.warn(
                         "Time slot unavailable",
@@ -113,9 +127,8 @@ class AppointmentService:
                 self.db.add(appointment)
                 await self.db.flush()
 
-                # Schedule notification jobs - if this fails, appointment creation rolls back
-                self._schedule_default_notification_jobs(appointment)
-                await self.db.flush()
+                # Schedule notification jobs — if this fails, appointment creation rolls back
+                await self._schedule_default_notification_jobs(appointment)
 
                 app_logger.info(
                     "Appointment created",
@@ -125,41 +138,86 @@ class AppointmentService:
                     salon_id=str(salon.id),
                     service_id=str(service.id),
                 )
-                
-                # Send emails if email service is configured
-                await self._send_booking_emails(appointment, salon, state)
-                
+
+                # Send emails if email service is configured (non-blocking for appointment creation)
+                await self._send_booking_emails_safe(appointment, salon, state)
+
                 return appointment
+
+    # ------------------------------------------------------------------
+    # CANCEL
+    # ------------------------------------------------------------------
 
     async def cancel_appointment(
         self,
         appointment_id: UUID,
+        salon_id: UUID,
         reason: str | None = None,
         cancelled_by: str = "client",
     ) -> Appointment | None:
-        appointment = await self.get_appointment(appointment_id)
-        if not appointment:
-            return None
+        """
+        Cancel an appointment with salon ownership check.
 
-        if appointment.status in {AppointmentStatus.CANCELLED_BY_CLIENT, AppointmentStatus.CANCELLED_BY_USER}:
+        Args:
+            appointment_id: The appointment to cancel.
+            salon_id: The salon that owns this appointment (authorization guard).
+            reason: Optional cancellation reason.
+            cancelled_by: Who cancelled — "client", "salon", or "reception".
+
+        Returns:
+            The cancelled Appointment, or None if not found.
+        """
+        async with self.db.begin_nested():
+            appointment = await self.get_appointment(appointment_id)
+            if not appointment:
+                return None
+
+            # Authorization: prevent cross-salon cancellation
+            if appointment.salon_id != salon_id:
+                app_logger.warn(
+                    "Cross-salon cancellation attempt blocked",
+                    event="security_alert",
+                    alert_type="unauthorized_cancellation",
+                    appointment_id=str(appointment_id),
+                    appointment_salon_id=str(appointment.salon_id),
+                    requesting_salon_id=str(salon_id),
+                )
+                raise ValueError("Appointment does not belong to this salon.")
+
+            if appointment.status in {
+                AppointmentStatus.CANCELLED_BY_CLIENT,
+                AppointmentStatus.CANCELLED_BY_USER,
+            }:
+                return appointment
+
+            appointment.status = (
+                AppointmentStatus.CANCELLED_BY_CLIENT if cancelled_by == "client" else AppointmentStatus.CANCELLED_BY_USER
+            )
+            appointment.cancelled_at = utc_now()
+            appointment.cancellation_reason = reason
+
+            cancellation_job = NotificationJob(
+                appointment_id=appointment.id,
+                salon_id=appointment.salon_id,
+                job_type=NotificationJobType.CUSTOMER_CANCELLATION,
+                due_at=utc_now(),
+                payload={"reason": reason or "", "cancelled_by": cancelled_by},
+            )
+            self.db.add(cancellation_job)
+
+            app_logger.info(
+                "Appointment cancelled",
+                event="appointment_cancelled",
+                booking_reference=appointment.booking_reference,
+                appointment_id=str(appointment_id),
+                cancelled_by=cancelled_by,
+            )
+
             return appointment
 
-        appointment.status = (
-            AppointmentStatus.CANCELLED_BY_CLIENT if cancelled_by == "client" else AppointmentStatus.CANCELLED_BY_USER
-        )
-        appointment.cancelled_at = utc_now()
-        appointment.cancellation_reason = reason
-
-        cancellation_job = NotificationJob(
-            appointment_id=appointment.id,
-            salon_id=appointment.salon_id,
-            job_type=NotificationJobType.CUSTOMER_CANCELLATION,
-            due_at=utc_now(),
-            payload={"reason": reason or "", "cancelled_by": cancelled_by},
-        )
-        self.db.add(cancellation_job)
-        await self.db.flush()
-        return appointment
+    # ------------------------------------------------------------------
+    # READ
+    # ------------------------------------------------------------------
 
     async def get_appointment(self, appointment_id: UUID) -> Appointment | None:
         statement: Select[tuple[Appointment]] = (
@@ -175,22 +233,24 @@ class AppointmentService:
         result = await self.db.execute(statement)
         return result.scalar_one_or_none()
 
-    async def update_status(self, appointment_id: UUID, new_status: str) -> Appointment | None:
-        appointment = await self.get_appointment(appointment_id)
-        if not appointment:
-            return None
-        
-        try:
-            status_enum = AppointmentStatus(new_status.lower())
-        except ValueError:
-            raise ValueError(f"Invalid appointment status: {new_status}")
+    async def list_appointments(
+        self,
+        salon_id: UUID | None = None,
+        status: str | None = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[Appointment]:
+        """
+        List appointments with pagination to prevent OOM on large datasets.
 
-        appointment.status = status_enum
-        await self.db.flush()
-        return appointment
-
-    async def list_appointments(self, salon_id: UUID | None = None, status: str | None = None) -> list[Appointment]:
-        query = select(Appointment).options(joinedload(Appointment.customer), joinedload(Appointment.service))
+        Args:
+            limit: Max number of records to return (default 100).
+            offset: Number of records to skip.
+        """
+        query = select(Appointment).options(
+            joinedload(Appointment.customer),
+            joinedload(Appointment.service),
+        )
         if salon_id:
             query = query.where(Appointment.salon_id == salon_id)
         if status:
@@ -199,33 +259,28 @@ class AppointmentService:
                 query = query.where(Appointment.status == status_enum)
             except ValueError:
                 pass
-        
-        query = query.order_by(Appointment.appointment_at.desc())
+
+        query = query.order_by(Appointment.appointment_at.desc()).limit(limit).offset(offset)
         result = await self.db.execute(query)
         return list(result.scalars().all())
 
-    async def list_upcoming_appointments(self, salon_id, hours: int = 24) -> list[Appointment]:
-        # Get salon to find its timezone
+    async def list_upcoming_appointments(self, salon_id: UUID, hours: int = 24) -> list[Appointment]:
+        """Return appointments from today through tomorrow for a given salon."""
         salon_stmt = select(Salon).where(Salon.id == salon_id)
         salon_result = await self.db.execute(salon_stmt)
         salon = salon_result.scalar_one_or_none()
-        
+
         if not salon:
             return []
-        
-        # Use salon's timezone for "today" calculation
+
         salon_tz = ZoneInfo(salon.timezone or "UTC")
         now_salon_time = utc_now().astimezone(salon_tz)
-        
-        # Start of today in salon timezone
         today_start = now_salon_time.replace(hour=0, minute=0, second=0, microsecond=0)
-        # End of tomorrow (to show "upcoming" appointments)
         until = today_start + timedelta(days=2)
-        
-        # Convert back to UTC for database comparison
+
         today_start_utc = today_start.astimezone(ZoneInfo("UTC")).replace(tzinfo=None)
         until_utc = until.astimezone(ZoneInfo("UTC")).replace(tzinfo=None)
-        
+
         statement: Select[tuple[Appointment]] = (
             select(Appointment)
             .options(joinedload(Appointment.customer), joinedload(Appointment.service))
@@ -239,6 +294,294 @@ class AppointmentService:
         result = await self.db.execute(statement)
         return list(result.scalars().all())
 
+    async def lookup_active_appointments(
+        self,
+        customer: Customer,
+        salon: Salon,
+    ) -> list[Appointment]:
+        """
+        Look up a customer's upcoming (non-cancelled, non-completed) appointments
+        at a specific salon. Deterministic SQL — no LLM involved.
+
+        Returns appointments sorted by date (soonest first), limited to the next 90 days.
+        """
+        now_utc = utc_now()
+        cutoff = now_utc + timedelta(days=90)
+
+        statement: Select[tuple[Appointment]] = (
+            select(Appointment)
+            .options(joinedload(Appointment.service))
+            .where(
+                Appointment.customer_id == customer.id,
+                Appointment.salon_id == salon.id,
+                Appointment.status.in_([AppointmentStatus.CONFIRMED, AppointmentStatus.PENDING]),
+                Appointment.appointment_at >= now_utc,
+                Appointment.appointment_at <= cutoff,
+            )
+            .order_by(Appointment.appointment_at.asc())
+        )
+        result = await self.db.execute(statement)
+        appointments = list(result.scalars().unique().all())
+
+        app_logger.info(
+            "Appointment lookup performed",
+            event="appointment_lookup",
+            customer_id=str(customer.id),
+            salon_id=str(salon.id),
+            found_count=len(appointments),
+        )
+
+        return appointments
+
+    # ------------------------------------------------------------------
+    # RESCHEDULE
+    # ------------------------------------------------------------------
+
+    async def update_appointment_time(
+        self,
+        appointment: Appointment,
+        salon: Salon,
+        new_date: date,
+        new_time: time,
+    ) -> Appointment:
+        """
+        Reschedule an existing appointment to a new date/time.
+
+        Validates availability and business hours before updating.
+        Cancels old notification jobs and schedules new ones within a single
+        nested transaction so the operation is atomic.
+
+        Returns the updated appointment.
+        """
+        if not appointment.service:
+            raise ValueError("Appointment has no associated service.")
+
+        # Validate the new time is in the future
+        new_appointment_at = datetime.combine(
+            new_date,
+            new_time,
+            tzinfo=ZoneInfo(salon.timezone),
+        ).astimezone(ZoneInfo("UTC"))
+
+        if new_appointment_at <= utc_now():
+            raise ValueError("The new appointment time must be in the future.")
+
+        # --- Maximum advance booking validation (3 months) ---
+        max_booking_date = utc_now() + timedelta(days=90)
+        if new_appointment_at > max_booking_date:
+            raise ValueError("Appointments can only be booked up to 3 months in advance.")
+
+        # --- Business hours validation ---
+        self._validate_business_hours(new_appointment_at, salon)
+
+        with app_logger.track_operation(
+            "reschedule_appointment",
+            appointment_id=str(appointment.id),
+            booking_reference=appointment.booking_reference,
+        ):
+            async with self.db.begin_nested():
+                # --- Availability check (exclude this appointment's own slot) with lock ---
+                overlap = await self._check_availability_locked_excluding(
+                    salon.id,
+                    new_appointment_at,
+                    appointment.service,
+                    exclude_id=appointment.id,
+                )
+                if overlap:
+                    app_logger.warn(
+                        "Reschedule conflict",
+                        event="reschedule_conflict",
+                        booking_reference=appointment.booking_reference,
+                        conflicting_booking=str(overlap.id),
+                    )
+                    raise ValueError("This time slot is already booked. Please choose another.")
+
+                # Apply the update
+                appointment.appointment_at = new_appointment_at
+
+                # Swap notification jobs atomically
+                await self._cancel_notification_jobs(appointment.id)
+                await self._schedule_default_notification_jobs(appointment)
+
+            app_logger.info(
+                "Appointment rescheduled",
+                event="appointment_rescheduled",
+                booking_reference=appointment.booking_reference,
+                customer_id=str(appointment.customer_id),
+                new_appointment_at=new_appointment_at.isoformat(),
+            )
+
+            return appointment
+
+    async def update_status(self, appointment_id: UUID, new_status: str) -> Appointment | None:
+        appointment = await self.get_appointment(appointment_id)
+        if not appointment:
+            return None
+
+        try:
+            status_enum = AppointmentStatus(new_status.lower())
+        except ValueError:
+            raise ValueError(f"Invalid appointment status: {new_status}")
+
+        appointment.status = status_enum
+        await self.db.flush()
+        return appointment
+
+    # ------------------------------------------------------------------
+    # NOTIFICATION JOBS
+    # ------------------------------------------------------------------
+
+    async def _cancel_notification_jobs(self, appointment_id: UUID) -> None:
+        """Delete all pending/processing notification jobs for an appointment."""
+        statement = select(NotificationJob).where(
+            NotificationJob.appointment_id == appointment_id,
+            NotificationJob.status.in_([NotificationJobStatus.PENDING, NotificationJobStatus.PROCESSING]),
+        )
+        result = await self.db.execute(statement)
+        jobs = result.scalars().all()
+        for job in jobs:
+            await self.db.delete(job)
+
+    async def _schedule_default_notification_jobs(self, appointment: Appointment) -> None:
+        """
+        Schedule default notification jobs for an appointment.
+
+        Idempotent: uses INSERT ... ON CONFLICT DO NOTHING to prevent
+        duplicate jobs if called multiple times (e.g., after a retry).
+        """
+        now = utc_now()
+        job_specs: list[tuple[int, NotificationJobType]] = [
+            (60, NotificationJobType.CUSTOMER_REMINDER_60),
+            (15, NotificationJobType.CUSTOMER_REMINDER_15),
+            (60, NotificationJobType.SALON_DIGEST_60),
+            (15, NotificationJobType.SALON_DIGEST_15),
+        ]
+        for minutes_before, job_type in job_specs:
+            due_at = appointment.appointment_at - timedelta(minutes=minutes_before)
+            if due_at <= now:
+                continue
+
+            job = NotificationJob(
+                appointment_id=appointment.id,
+                salon_id=appointment.salon_id,
+                job_type=job_type,
+                due_at=due_at,
+                payload={"minutes_before": minutes_before},
+            )
+            self.db.add(job)
+
+        try:
+            await self.db.flush()
+        except IntegrityError:
+            # Unique constraint on (appointment_id, job_type) — jobs already exist.
+            # This is safe to ignore (idempotency).
+            await self.db.rollback()
+
+    # ------------------------------------------------------------------
+    # AVAILABILITY CHECKS (with row-level locking to prevent race conditions)
+    # ------------------------------------------------------------------
+
+    async def _check_availability_locked(
+        self,
+        salon_id: UUID,
+        appointment_at: datetime,
+        service: SalonService,
+    ) -> Appointment | None:
+        """
+        Check slot availability with a SELECT FOR UPDATE lock to prevent
+        concurrent double-bookings (TOCTOU race condition).
+
+        Returns the conflicting appointment if one exists, None otherwise.
+        """
+        buffer_minutes = 15
+        new_duration = timedelta(minutes=max(service.duration_minutes, 0) if service.duration_minutes else DEFAULT_DURATION_MINUTES)
+        new_start = appointment_at
+        new_end = appointment_at + new_duration
+
+        buffer_start = new_start - timedelta(minutes=buffer_minutes)
+        buffer_end = new_end + timedelta(minutes=buffer_minutes)
+
+        statement = (
+            select(Appointment)
+            .options(selectinload(Appointment.service))
+            .where(
+                Appointment.salon_id == salon_id,
+                Appointment.status.in_([AppointmentStatus.CONFIRMED]),
+                Appointment.appointment_at >= buffer_start,
+                Appointment.appointment_at <= buffer_end,
+            )
+            .with_for_update(skip_locked=True)  # Lock to prevent concurrent writes
+        )
+        result = await self.db.execute(statement)
+        existing_appointments = result.scalars().unique().all()
+
+        for existing in existing_appointments:
+            existing_start = existing.appointment_at
+            existing_duration = timedelta(
+                minutes=max(existing.service.duration_minutes, 0)
+                if existing.service and existing.service.duration_minutes
+                else DEFAULT_DURATION_MINUTES
+            )
+            existing_end = existing_start + existing_duration
+
+            if existing_start < new_end and existing_end > new_start:
+                return existing
+
+        return None
+
+    async def _check_availability_locked_excluding(
+        self,
+        salon_id: UUID,
+        appointment_at: datetime,
+        service: SalonService,
+        exclude_id: UUID,
+    ) -> Appointment | None:
+        """
+        Same as _check_availability_locked but excludes a specific appointment ID.
+
+        Used when rescheduling — prevents flagging the user's own slot as a conflict.
+        """
+        buffer_minutes = 15
+        new_duration = timedelta(minutes=max(service.duration_minutes, 0) if service.duration_minutes else DEFAULT_DURATION_MINUTES)
+        new_start = appointment_at
+        new_end = appointment_at + new_duration
+
+        buffer_start = new_start - timedelta(minutes=buffer_minutes)
+        buffer_end = new_end + timedelta(minutes=buffer_minutes)
+
+        statement = (
+            select(Appointment)
+            .options(selectinload(Appointment.service))
+            .where(
+                Appointment.salon_id == salon_id,
+                Appointment.status.in_([AppointmentStatus.CONFIRMED]),
+                Appointment.appointment_at >= buffer_start,
+                Appointment.appointment_at <= buffer_end,
+                Appointment.id != exclude_id,
+            )
+            .with_for_update(skip_locked=True)
+        )
+        result = await self.db.execute(statement)
+        existing_appointments = result.scalars().unique().all()
+
+        for existing in existing_appointments:
+            existing_start = existing.appointment_at
+            existing_duration = timedelta(
+                minutes=max(existing.service.duration_minutes, 0)
+                if existing.service and existing.service.duration_minutes
+                else DEFAULT_DURATION_MINUTES
+            )
+            existing_end = existing_start + existing_duration
+
+            if existing_start < new_end and existing_end > new_start:
+                return existing
+
+        return None
+
+    # ------------------------------------------------------------------
+    # INTERNAL HELPERS
+    # ------------------------------------------------------------------
+
     async def _get_service(self, service_id: UUID) -> SalonService | None:
         result = await self.db.execute(select(SalonService).where(SalonService.id == service_id))
         return result.scalar_one_or_none()
@@ -246,7 +589,7 @@ class AppointmentService:
     def _validate_business_hours(self, appointment_at: datetime, salon: Salon) -> None:
         """
         Validate the appointment falls within the salon's operating hours.
-        
+
         Salon operating hours are stored in the flow_config JSONB column as:
         {"opening_hour": 9, "closing_hour": 18, "closed_days": ["sunday"]}
         Defaults to 9:00-18:00 if not configured.
@@ -256,7 +599,6 @@ class AppointmentService:
         closing_hour = flow_config.get("closing_hour", 18)
         closed_days = [d.lower() for d in flow_config.get("closed_days", [])]
 
-        # Convert to salon local time for business hours check
         local_time = appointment_at.astimezone(ZoneInfo(salon.timezone))
         day_name = local_time.strftime("%A").lower()
 
@@ -271,114 +613,54 @@ class AppointmentService:
                 f"{local_time.strftime('%H:%M')} is outside business hours."
             )
 
-    async def _check_availability(
-        self, salon_id: UUID, appointment_at: datetime, service: SalonService
-    ) -> Appointment | None:
-        """
-        Check if the requested time slot conflicts with an existing confirmed appointment.
-
-        Uses proper overlap detection: existing.start < new.end AND existing.end > new.start
-        Includes a 15-minute buffer between appointments.
-        Returns the conflicting appointment if one exists, None otherwise.
-        """
-        buffer_minutes = 15
-        new_duration = timedelta(minutes=max(service.duration_minutes, 0))
-        new_start = appointment_at
-        new_end = appointment_at + new_duration
-
-        # Calculate buffer windows
-        buffer_start = new_start - timedelta(minutes=buffer_minutes)
-        buffer_end = new_end + timedelta(minutes=buffer_minutes)
-
-        # Find existing appointments that could overlap (broad window)
-        from sqlalchemy.orm import selectinload
-        statement = (
-            select(Appointment)
-            .options(selectinload(Appointment.service), selectinload(Appointment.customer))
-            .where(
-                Appointment.salon_id == salon_id,
-                Appointment.status.in_([AppointmentStatus.CONFIRMED]),
-                Appointment.appointment_at >= buffer_start,
-                Appointment.appointment_at <= buffer_end,
-            )
-        )
-        result = await self.db.execute(statement)
-        existing_appointments = result.scalars().unique().all()
-
-        # Check for actual overlaps including duration
-        for existing in existing_appointments:
-            existing_start = existing.appointment_at
-            # Get existing duration from service
-            existing_duration = timedelta(minutes=60)  # Default fallback
-            if existing.service:
-                existing_duration = timedelta(minutes=max(existing.service.duration_minutes, 0))
-            existing_end = existing_start + existing_duration
-
-            # Proper overlap check: existing.start < new.end AND existing.end > new.start
-            if existing_start < new_end and existing_end > new_start:
-                return existing
-
-        return None
-
-    def _schedule_default_notification_jobs(self, appointment: Appointment) -> None:
-        now = utc_now()
-        job_specs = [
-            (60, NotificationJobType.CUSTOMER_REMINDER_60),
-            (15, NotificationJobType.CUSTOMER_REMINDER_15),
-            (60, NotificationJobType.SALON_DIGEST_60),
-            (15, NotificationJobType.SALON_DIGEST_15),
-        ]
-        for minutes_before, job_type in job_specs:
-            due_at = appointment.appointment_at - timedelta(minutes=minutes_before)
-            if due_at <= now:
-                continue
-            self.db.add(
-                NotificationJob(
-                    appointment_id=appointment.id,
-                    salon_id=appointment.salon_id,
-                    job_type=job_type,
-                    due_at=due_at,
-                    payload={"minutes_before": minutes_before},
-                )
-            )
-
     @staticmethod
     def _generate_booking_reference() -> str:
         return f"BP-{uuid4().hex[:8].upper()}"
 
-    async def _send_booking_emails(
+    async def _send_booking_emails_safe(
         self,
         appointment: Appointment,
         salon: Salon,
         state: ConversationState,
     ) -> None:
-        """Send confirmation email to customer and notification to owner."""
+        """
+        Send confirmation emails — wrapped in try/except so email failures
+        never prevent the appointment from being created.
+        """
         if not self.email_service or not state.slots.email:
             return
+        if not state.slots.appointment_date or not state.slots.appointment_time:
+            return
 
-        date_str = state.slots.appointment_date.strftime("%d %b %Y")
-        time_str = state.slots.appointment_time.strftime("%I:%M %p")
-        
-        # Send to customer
-        await self.email_service.send_appointment_confirmation(
-            to_email=state.slots.email,
-            customer_name=state.slots.customer_name or "Valued Customer",
-            salon_name=salon.name,
-            service_name=state.slots.service_name or appointment.service_name_snapshot,
-            appointment_date=date_str,
-            appointment_time=time_str,
-            booking_reference=appointment.booking_reference,
-        )
-        
-        # Send to salon owner
-        owner_email = self.email_service.settings.salon_owner_email
-        if owner_email:
-            await self.email_service.send_owner_notification(
-                owner_email=owner_email,
+        try:
+            date_str = state.slots.appointment_date.strftime("%d %b %Y")
+            time_str = state.slots.appointment_time.strftime("%I:%M %p")
+
+            await self.email_service.send_appointment_confirmation(
+                to_email=state.slots.email,
+                customer_name=state.slots.customer_name or "Valued Customer",
                 salon_name=salon.name,
-                customer_email=state.slots.email,
                 service_name=state.slots.service_name or appointment.service_name_snapshot,
                 appointment_date=date_str,
                 appointment_time=time_str,
                 booking_reference=appointment.booking_reference,
+            )
+
+            owner_email = self.email_service.settings.salon_owner_email
+            if owner_email:
+                await self.email_service.send_owner_notification(
+                    owner_email=owner_email,
+                    salon_name=salon.name,
+                    customer_email=state.slots.email,
+                    service_name=state.slots.service_name or appointment.service_name_snapshot,
+                    appointment_date=date_str,
+                    appointment_time=time_str,
+                    booking_reference=appointment.booking_reference,
+                )
+        except Exception as e:
+            app_logger.warn(
+                "Email send failed (non-fatal)",
+                event="email_send_error",
+                booking_reference=appointment.booking_reference,
+                error=str(e),
             )

@@ -1,12 +1,13 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import Settings
-from app.core.enums import ConversationStep
+from app.core.enums import ConversationStep, UserIntent
+from app.db.models.appointment import Appointment
 from app.db.models.message import InboundMessage, OutboundMessage
 from app.flows.engine import ConversationEngine
 from app.llm.service import LLMService
@@ -35,9 +36,13 @@ class ConversationService:
         self.state_store = state_store
         self.llm_service = llm_service
         self.dispatcher = dispatcher
-        self.engine = ConversationEngine(llm_service=llm_service, settings=settings)
-        self.tenant_service = TenantService(db)
         self.appointment_service = AppointmentService(db, email_service=email_service)
+        self.engine = ConversationEngine(
+            llm_service=llm_service,
+            settings=settings,
+            appointment_service=self.appointment_service,
+        )
+        self.tenant_service = TenantService(db)
 
     async def handle_inbound(self, inbound: NormalizedInboundMessage) -> ProcessResult:
         app_logger.info(
@@ -156,12 +161,87 @@ class ConversationService:
             step_before_process = state.step if state else None
 
             # Handle new tuple return type from process_message (result, state_was_reset)
-            result, state_was_reset = await self.engine.process_message(state, inbound.text, salon, active_services)
+            result, state_was_reset = await self.engine.process_message(
+                state, inbound.text, salon, active_services, customer=customer
+            )
             result.state.updated_at = datetime.now(timezone.utc)
 
+            # --- MANAGE APPOINTMENT LOOKUP INTERCEPT ---
+            # If the engine signals a lookup request, perform the DB lookup and display results
+            if (
+                result.messages
+                and result.messages[0].text == "__LOOKUP_APPOINTMENTS__"
+                and result.state.intent == UserIntent.MANAGE_BOOKING
+            ):
+                upcoming = await self.appointment_service.lookup_active_appointments(customer, salon)
+
+                if not upcoming:
+                    # No appointments found
+                    result.messages = [
+                        OutboundInstruction(
+                            text="I couldn't find any upcoming appointments for you. Would you like to book a new one?",
+                            buttons=[
+                                {"label": "📅 Book New Appointment", "callback": "action_book_new"},
+                                {"label": "🔄 Start Over", "callback": "restart_flow"},
+                            ],
+                        )
+                    ]
+                    result.state.intent = UserIntent.NEW_BOOKING
+                    result.state.step = ConversationStep.GREETING
+                else:
+                    # Display the first (soonest) appointment with action buttons
+                    apt: Appointment = upcoming[0]
+                    local_time = apt.appointment_at.astimezone(ZoneInfo(salon.timezone))
+                    date_str = local_time.strftime("%A, %d %b %Y")
+                    time_str = local_time.strftime("%I:%M %p")
+
+                    # Pre-fill state with appointment data for rescheduling
+                    result.state.target_appointment_id = str(apt.id)
+                    result.state.slots.service_id = str(apt.service_id) if apt.service_id else None
+                    result.state.slots.service_name = apt.service_name_snapshot
+                    result.state.slots.appointment_date = local_time.date()
+                    result.state.slots.appointment_time = local_time.time()
+                    result.state.slots.customer_name = customer.display_name
+
+                    # If multiple appointments, show them all
+                    if len(upcoming) > 1:
+                        apt_list = "\n".join(
+                            f"• {a.service_name_snapshot} — {a.appointment_at.astimezone(ZoneInfo(salon.timezone)).strftime('%d %b, %I:%M %p')}"
+                            for a in upcoming
+                        )
+                        header_text = (
+                            f"I found {len(upcoming)} upcoming appointments:\n\n{apt_list}\n\n"
+                            f"Here's your next one:\n"
+                        )
+                    else:
+                        header_text = "Here's your upcoming appointment:\n\n"
+
+                    result.messages = [
+                        OutboundInstruction(
+                            text=(
+                                f"{header_text}"
+                                f"📋 **{apt.service_name_snapshot}**\n"
+                                f"Ref: {apt.booking_reference}\n"
+                                f"📅 {date_str}\n"
+                                f"⏰ {time_str}\n\n"
+                                f"What would you like to do?"
+                            ),
+                            buttons=[
+                                {"label": "🔄 Reschedule", "callback": "action_reschedule"},
+                                {"label": "❌ Cancel", "callback": "action_cancel"},
+                                {"label": "✅ Keep as is", "callback": "action_keep"},
+                                {"label": "🔄 Start Over", "callback": "restart_flow"},
+                            ],
+                        )
+                    ]
+                    # Set step to MANAGE_APPOINTMENT_MENU so the engine handles subsequent actions
+                    result.state.step = ConversationStep.MANAGE_APPOINTMENT_MENU
+            # --- END MANAGE APPOINTMENT LOOKUP INTERCEPT ---
+
             # --- APPOINTMENT TIME VALIDATION INTERCEPT ---
-            # If the user just selected a time successfully, validate it against DB strictly before advancing
-            if step_before_process == ConversationStep.APPOINTMENT_TIME and result.state.step == ConversationStep.EMAIL:
+            # If the user confirmed a time and is proceeding to email, validate against DB
+            # Note: Flow now goes APPOINTMENT_TIME → TIME_CONFIRMATION → EMAIL
+            if step_before_process == ConversationStep.TIME_CONFIRMATION and result.state.step == ConversationStep.EMAIL:
                 try:
                     from uuid import UUID
                     appointment_at = datetime.combine(
@@ -227,7 +307,109 @@ class ConversationService:
             if result.state.slots.language:
                 customer.preferred_language = result.state.slots.language
 
-            if result.should_create_appointment:
+            # --- CANCELLATION INTERCEPT ---
+            if result.should_cancel_appointment and result.state.target_appointment_id:
+                try:
+                    from uuid import UUID
+                    appointment = await self.appointment_service.cancel_appointment(
+                        UUID(result.state.target_appointment_id),
+                        salon_id=salon.id,
+                        reason="Cancelled via chatbot",
+                        cancelled_by="client",
+                    )
+                    if appointment:
+                        instructions = [
+                            OutboundInstruction(
+                                text=f"Your appointment {appointment.booking_reference} has been cancelled."
+                            )
+                        ]
+                    else:
+                        instructions = [
+                            OutboundInstruction(text="Could not find the appointment to cancel.")
+                        ]
+                    booking_reference = None
+                except Exception as e:
+                    app_logger.error(
+                        "Failed to cancel appointment via chatbot",
+                        event="cancellation_error",
+                        error=str(e),
+                    )
+                    instructions = [
+                        OutboundInstruction(text="Sorry, something went wrong while cancelling. Please try again or contact the salon.")
+                    ]
+            # --- END CANCELLATION INTERCEPT ---
+
+            # --- RESCHEDULE INTERCEPT ---
+            elif result.should_update_appointment and result.state.target_appointment_id:
+                try:
+                    from uuid import UUID
+                    appointment = await self.appointment_service.get_appointment(
+                        UUID(result.state.target_appointment_id)
+                    )
+                    if appointment and result.state.slots.appointment_date and result.state.slots.appointment_time:
+                        updated = await self.appointment_service.update_appointment_time(
+                            appointment,
+                            salon,
+                            result.state.slots.appointment_date,
+                            result.state.slots.appointment_time,
+                        )
+                        local_time = updated.appointment_at.astimezone(ZoneInfo(salon.timezone))
+                        instructions = [
+                            OutboundInstruction(
+                                text=(
+                                    f"Your appointment has been rescheduled.\n"
+                                    f"Booking reference: {updated.booking_reference}\n"
+                                    f"Service: {updated.service_name_snapshot}\n"
+                                    f"New Date: {local_time.strftime('%d %b %Y')}\n"
+                                    f"New Time: {local_time.strftime('%I:%M %p')}"
+                                )
+                            )
+                        ]
+                        booking_reference = updated.booking_reference
+                    else:
+                        instructions = [
+                            OutboundInstruction(text="Could not find the appointment or missing details to reschedule.")
+                        ]
+                except ValueError as e:
+                    error_message = str(e)
+                    app_logger.warn(
+                        "Reschedule validation error",
+                        event="reschedule_validation_error",
+                        error=error_message,
+                    )
+                    # Reset to date selection so user can try again
+                    result.state.step = ConversationStep.APPOINTMENT_DATE
+                    result.clear_state = False
+                    today = datetime.now(ZoneInfo(salon.timezone)).date()
+                    date_buttons = []
+                    for i in range(7):
+                        target_date = today + timedelta(days=i)
+                        if i == 0:
+                            label = "Today"
+                        elif i == 1:
+                            label = "Tomorrow"
+                        else:
+                            label = target_date.strftime("%a %d %b")
+                        date_buttons.append({"label": label, "callback": f"date_{target_date.isoformat()}"})
+                    instructions = [
+                        OutboundInstruction(text=error_message),
+                        OutboundInstruction(
+                            text="Please choose a different date:",
+                            buttons=date_buttons,
+                        ),
+                    ]
+                except Exception as e:
+                    app_logger.error(
+                        "Failed to reschedule appointment via chatbot",
+                        event="reschedule_error",
+                        error=str(e),
+                    )
+                    instructions = [
+                        OutboundInstruction(text="Sorry, something went wrong while rescheduling. Please try again or contact the salon.")
+                    ]
+            # --- END RESCHEDULE INTERCEPT ---
+
+            elif result.should_create_appointment:
                 # ONLY write to DB when appointment is confirmed
                 try:
                     appointment = await self.appointment_service.create_appointment(salon, customer, result.state)

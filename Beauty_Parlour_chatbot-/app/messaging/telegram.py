@@ -63,25 +63,23 @@ class TelegramTransport(MessagingTransport):
                 response = await self.http_client.post(url, json=payload, timeout=10.0)
                 response.raise_for_status()
                 data = response.json()
-                
+
                 # Check Telegram API response status (even 200 OK can contain errors)
                 if not data.get("ok", False):
                     error_desc = data.get("description", "Unknown error")
                     app_logger.error(f"Telegram API error: {error_desc}")
-                    continue
-                
-                message_id = data.get("result", {}).get("message_id")
-                if not message_id:
-                    app_logger.error(f"Telegram API didn't return message_id in response: {data}")
-                    continue
-                
-                deliveries.append(
-                    DeliveryResult(
-                        provider_message_id=str(message_id),
-                        text=instruction.text,
-                        payload=payload,
-                    )
-                )
+                else:
+                    message_id = data.get("result", {}).get("message_id")
+                    if not message_id:
+                        app_logger.error(f"Telegram API didn't return message_id in response: {data}")
+                    else:
+                        deliveries.append(
+                            DeliveryResult(
+                                provider_message_id=str(message_id),
+                                text=instruction.text,
+                                payload=payload,
+                            )
+                        )
             except httpx.HTTPStatusError as e:
                 app_logger.error(f"Telegram API error (status {e.response.status_code}): {e.response.text[:200]}")
             except httpx.TimeoutException as e:

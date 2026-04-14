@@ -8,5 +8,6 @@ groq==0.31.0
 pydantic==2.11.7
 pydantic-settings==2.10.1
 python-dateutil==2.9.0.post0
+dateparser==1.2.1
 certifi==2024.12.14
 python-jose[cryptography]==3.3.0

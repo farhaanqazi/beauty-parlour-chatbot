@@ -21,6 +21,7 @@ from app.services.appointment_service import AppointmentService
 from app.services.notification_service import NotificationService
 from app.services.tenant_service import TenantService
 from app.utils.logger import app_logger
+from app.middleware.rate_limiter import limiter as shared_limiter
 
 # Strict rate limit on appointment creation: 10 per minute per IP
 _appointment_limiter = Limiter(key_func=get_remote_address, default_limits=["100 per hour"])
@@ -38,8 +39,10 @@ class CreateAppointmentRequest(BaseModel):
 
 
 @router.get("/appointments")
+@shared_limiter.limit("200 per minute")
 async def list_appointments(
-    salon_id: UUID = Query(...),
+    request: Request,
+    salon_id: str = Query(...),
     date_from: datetime = Query(...),
     date_to: datetime = Query(...),
     status: str = Query(None),
@@ -89,6 +92,7 @@ async def list_appointments(
             "customer": appt.customer.display_name if appt.customer else None,
             "appointment_at": appt.appointment_at.isoformat(),
             "status": appt.status.value,
+            "final_price": float(appt.final_price) if appt.final_price else 0,
         }
         for appt in appointments
     ]
@@ -217,7 +221,9 @@ async def create_appointment(
 
 
 @router.get("/salons/{salon_identifier}/appointments/all")
+@shared_limiter.limit("200 per minute")
 async def list_all_salon_appointments(
+    request: Request,
     salon_identifier: str,
     db=Depends(get_db),
     current_user: AuthenticatedUser = Depends(get_current_user),
@@ -267,6 +273,7 @@ async def list_all_salon_appointments(
                 "customer_name": appointment.customer.display_name if appointment.customer else "Unknown",
                 "appointment_at": appointment.appointment_at.isoformat(),
                 "status": appointment.status.value,
+                "final_price": float(appointment.final_price) if appointment.final_price else 0,
             }
             for appointment in appointments
         ],
@@ -274,7 +281,9 @@ async def list_all_salon_appointments(
 
 
 @router.get("/salons/{salon_identifier}/appointments/upcoming")
+@shared_limiter.limit("200 per minute")
 async def list_upcoming_appointments(
+    request: Request,
     salon_identifier: str,
     hours: int = Query(default=24, ge=1, le=168),
     db=Depends(get_db),
@@ -312,6 +321,7 @@ async def list_upcoming_appointments(
                 "customer": appointment.customer.display_name if appointment.customer else None,
                 "appointment_at": appointment.appointment_at.isoformat(),
                 "status": appointment.status.value,
+                "final_price": float(appointment.final_price) if appointment.final_price else 0,
             }
             for appointment in appointments
         ],
@@ -319,7 +329,9 @@ async def list_upcoming_appointments(
 
 
 @router.post("/appointments/{appointment_id}/cancel")
+@shared_limiter.limit("20 per minute")
 async def cancel_appointment(
+    request: Request,
     appointment_id: UUID,
     payload: CancelAppointmentRequest,
     db=Depends(get_db),

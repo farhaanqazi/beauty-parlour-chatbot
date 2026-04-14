@@ -349,24 +349,50 @@ WHERE slug = 'demo-beauty-palace'
 ON CONFLICT DO NOTHING;
 
 -- ============================================================
--- 9. CREATE FIRST ADMIN USER INSTRUCTION
+-- 9. CREATE DEMO USERS (Admin + Salon Owner + Reception)
 -- ============================================================
--- IMPORTANT: Run this AFTER creating user in Supabase Auth
--- 
--- Step 1: Go to Supabase Dashboard → Authentication → Users
--- Step 2: Create new user with email/password
--- Step 3: Copy the User ID (UUID)
--- Step 4: Uncomment and run the following:
+-- IMPORTANT: These steps create users in BOTH Supabase Auth AND the users table.
+-- You must replace <uuid> values with actual UUIDs from Supabase Auth after creating accounts.
 --
--- INSERT INTO users (id, email, full_name, role, salon_id, is_active, created_by)
+-- Step 1: Go to Supabase Dashboard → Authentication → Users
+-- Step 2: Create these 3 users with the passwords listed:
+--   • owner@demobeauty.com  —  password: owner123
+--   • admin@demobeauty.com  —  password: admin123
+--   • reception@demobeauty.com — password: reception123
+-- Step 3: Copy each User ID (UUID) from Auth → Users
+-- Step 4: Uncomment the INSERT statements below and replace <uuid> with actual UUIDs:
+--
+-- -- SALON OWNER (linked to Demo Beauty Palace)
+-- INSERT INTO users (id, email, full_name, role, salon_id, is_active)
 -- VALUES (
---     '<uuid-from-auth-users>',  -- Replace with actual UUID
+--     '<uuid-from-auth-for-owner>',
+--     'owner@demobeauty.com',
+--     'Salon Owner',
+--     'salon_owner',
+--     (SELECT id FROM salons WHERE slug = 'demo-beauty-palace'),
+--     TRUE
+-- );
+--
+-- -- ADMIN (can access all salons)
+-- INSERT INTO users (id, email, full_name, role, salon_id, is_active)
+-- VALUES (
+--     '<uuid-from-auth-for-admin>',
 --     'admin@demobeauty.com',
 --     'Demo Admin',
 --     'admin',
+--     NULL,
+--     TRUE
+-- );
+--
+-- -- RECEPTION (linked to Demo Beauty Palace)
+-- INSERT INTO users (id, email, full_name, role, salon_id, is_active)
+-- VALUES (
+--     '<uuid-from-auth-for-reception>',
+--     'reception@demobeauty.com',
+--     'Front Desk',
+--     'reception',
 --     (SELECT id FROM salons WHERE slug = 'demo-beauty-palace'),
---     TRUE,
---     NULL
+--     TRUE
 -- );
 -- ============================================================
 

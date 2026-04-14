@@ -37,7 +37,7 @@ const NewAppointmentModal: React.FC<NewAppointmentModalProps> = ({ isOpen, onClo
   const customerId = React.useMemo(() => isOpen ? generateCustomerId() : '', [isOpen]);
 
   // Fetch Services
-  const { data: services, isLoading: servicesLoading, error: servicesError, refetch: refetchServices } = useQuery({
+  const { data: services, isLoading: servicesLoading, error: servicesError } = useQuery({
     queryKey: ['salonServices', salonId],
     queryFn: async () => {
       console.log('Fetching services for salonId:', salonId);

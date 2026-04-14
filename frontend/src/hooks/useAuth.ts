@@ -202,13 +202,16 @@ export const useAuth = () => {
 
       console.log('[useAuth.login] Navigation triggered. Role:', userData.role);
       
-      // Navigate based on role: admins go to salon selection, others go direct to dashboard
+      // Navigate based on role: admins go to salon selection, others go direct to role-specific dashboard
       if (userData.role === 'admin') {
         setLoading(false);
         setTimeout(() => navigate('/salon-select'), 0);
-      } else if (userData.role) {
+      } else if (userData.role === 'salon_owner') {
         setLoading(false);
-        setTimeout(() => navigate('/dashboard'), 0);
+        setTimeout(() => navigate('/owner/dashboard'), 0);
+      } else if (userData.role === 'reception') {
+        setLoading(false);
+        setTimeout(() => navigate('/reception/dashboard'), 0);
       } else {
         setLoading(false);
         navigate('/login');

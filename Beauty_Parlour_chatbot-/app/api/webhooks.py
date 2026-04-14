@@ -23,7 +23,6 @@ _webhook_limiter = Limiter(key_func=get_remote_address, default_limits=["60 per 
 router = APIRouter(prefix="/webhooks", tags=["webhooks"])
 
 
-@_webhook_limiter.limit("60 per minute")
 @router.get("/whatsapp/{salon_slug}")
 async def verify_whatsapp_webhook(
     request: Request,
@@ -51,7 +50,6 @@ async def verify_whatsapp_webhook(
     raise HTTPException(status_code=403, detail="Webhook verification failed.")
 
 
-@_webhook_limiter.limit("30 per minute")
 @router.post("/whatsapp/{salon_slug}")
 async def receive_whatsapp_webhook(
     request: Request,
@@ -65,7 +63,16 @@ async def receive_whatsapp_webhook(
     
     # Verify WhatsApp webhook signature (HMAC-SHA256)
     x_hub_signature = request.headers.get("X-Hub-Signature-256", "")
-    if x_hub_signature and settings.whatsapp_access_token:
+    if settings.whatsapp_access_token:
+        if not x_hub_signature:
+            app_logger.warn(
+                "WhatsApp webhook signature missing",
+                event="webhook_auth_failure",
+                channel="whatsapp",
+                salon_slug=salon_slug,
+            )
+            raise HTTPException(status_code=403, detail="Missing webhook signature")
+            
         expected_signature = "sha256=" + hmac.new(
             settings.whatsapp_access_token.encode("utf-8"),
             raw_body,
@@ -134,7 +141,6 @@ async def receive_whatsapp_webhook(
         raise
 
 
-@_webhook_limiter.limit("30 per minute")
 @router.post("/telegram/{salon_slug}")
 async def receive_telegram_webhook(
     request: Request,
@@ -144,18 +150,20 @@ async def receive_telegram_webhook(
     settings: Settings = Depends(get_app_settings),
 ) -> dict:
     # Verify Telegram webhook signature (secret token)
-    # Note: For development/testing, we're skipping this check
-    # In production, set TELEGRAM_WEBHOOK_SECRET in environment
+    # Note: Telegram's secret_token only allows a-z, A-Z, 0-9, _, -
+    # We replace the colon in the bot token with an underscore to make it compatible
     secret_token = request.headers.get("X-Telegram-Bot-Api-Secret-Token", "")
-    # if settings.telegram_bot_token and secret_token != settings.telegram_bot_token:
-    #     app_logger.warn(
-    #         "Telegram webhook secret mismatch",
-    #         event="webhook_auth_failure",
-    #         channel="telegram",
-    #         salon_slug=salon_slug,
-    #         has_secret=bool(secret_token),
-    #     )
-    #     raise HTTPException(status_code=403, detail="Invalid webhook secret")
+    expected_secret = settings.telegram_bot_token.replace(":", "_") if settings.telegram_bot_token else ""
+    
+    if expected_secret and secret_token != expected_secret:
+        app_logger.warn(
+            "Telegram webhook secret mismatch",
+            event="webhook_auth_failure",
+            channel="telegram",
+            salon_slug=salon_slug,
+            has_secret=bool(secret_token),
+        )
+        raise HTTPException(status_code=403, detail="Invalid webhook secret")
 
     # Read and parse raw body
     raw_body = await request.body()

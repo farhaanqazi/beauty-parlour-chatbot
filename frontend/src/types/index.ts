@@ -56,6 +56,7 @@ export interface Appointment {
   created_at: string;
   customer: CustomerSummary;
   service: ServiceSummary;
+  final_price?: number;
 }
 
 export interface AppointmentStatusLog {

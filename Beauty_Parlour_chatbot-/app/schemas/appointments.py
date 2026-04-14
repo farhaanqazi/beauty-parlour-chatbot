@@ -11,6 +11,7 @@ class AppointmentResponse(BaseModel):
     booking_reference: str
     status: str
     appointment_at: datetime
+    final_price: float | None = None
 
 
 class CancelAppointmentRequest(BaseModel):

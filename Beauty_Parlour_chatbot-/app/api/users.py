@@ -13,6 +13,7 @@ from app.core.enums import UserRole
 from app.db.models.user import User
 from app.db.models.salon import Salon
 from typing import Optional
+from app.middleware.rate_limiter import limiter as shared_limiter
 
 # Strict rate limit on user creation: 5 per hour per IP
 _user_limiter = Limiter(key_func=get_remote_address, default_limits=["5 per hour"])
@@ -21,7 +22,9 @@ router = APIRouter(tags=["users"])
 
 
 @router.get("/users")
+@shared_limiter.limit("200 per minute")
 async def list_users(
+    request: Request,
     salon_id: Optional[UUID] = None,
     role: Optional[str] = None,
     is_active: Optional[bool] = None,
@@ -73,7 +76,9 @@ async def list_users(
 
 
 @router.get("/users/{user_id}")
+@shared_limiter.limit("200 per minute")
 async def get_user(
+    request: Request,
     user_id: UUID,
     db=Depends(get_db),
     user: AuthenticatedUser = Depends(require_roles("admin")),
@@ -182,7 +187,9 @@ async def create_user(
 
 
 @router.patch("/users/{user_id}")
+@shared_limiter.limit("20 per minute")
 async def update_user(
+    request: Request,
     user_id: UUID,
     is_active: Optional[bool] = Query(None),
     full_name: Optional[str] = Query(None),
@@ -220,7 +227,9 @@ async def update_user(
 
 
 @router.delete("/users/{user_id}")
+@shared_limiter.limit("20 per minute")
 async def delete_user(
+    request: Request,
     user_id: UUID,
     db=Depends(get_db),
     user: AuthenticatedUser = Depends(require_roles("admin")),

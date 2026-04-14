@@ -1,5 +1,5 @@
 from datetime import datetime, timedelta
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Request
 from typing import Dict, Any, List, Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import text, func, extract, case
@@ -9,6 +9,7 @@ from app.api.deps import get_db, get_current_user, AuthenticatedUser
 from app.db.models.appointment import Appointment
 from app.db.models.salon import SalonService
 from app.core.enums import AppointmentStatus
+from app.middleware.rate_limiter import limiter as shared_limiter
 
 router = APIRouter(tags=["analytics"])
 
@@ -28,63 +29,77 @@ def get_salon_filter(user: AuthenticatedUser) -> tuple:
 # ============================================================================
 
 @router.get("/analytics/kpis")
+@shared_limiter.limit("200 per minute")
 async def get_kpis(
+    request: Request,
     db: AsyncSession = Depends(get_db),
     user: AuthenticatedUser = Depends(get_current_user),
 ) -> Dict[str, Any]:
     """
     Get KPIs for the user's salon.
 
-    Requires authentication. Returns salon-specific metrics based on user's salon_id.
-    Admin users can see system-wide metrics.
+    Includes real revenue data from appointments.final_price column.
     """
     try:
-        # Test database connection first
-        result = await db.execute(text("SELECT 1"))
-        print(f"Database connection OK for user: {user.email}")
-
-        # For admin users, return system-wide metrics
-        # For salon_owner/reception, return salon-specific metrics
-        if user.role == 'admin':
-            query = text("""
-                SELECT
-                    (SELECT COUNT(*) FROM salons) as total_salons,
-                    (SELECT COUNT(*) FROM users) as total_users,
-                    (SELECT COUNT(*) FROM appointments WHERE appointment_at::date = CURRENT_DATE) as todays_appointments,
-                    (SELECT COUNT(*) FROM appointments WHERE status = 'pending') as pending_appointments,
-                    (SELECT COUNT(*) FROM appointments WHERE status = 'confirmed') as confirmed_appointments,
-                    (SELECT COUNT(*) FROM appointments WHERE status = 'completed') as completed_appointments,
-                    (SELECT COUNT(*) FROM appointments WHERE status = 'no_show') as no_shows
-            """)
+        # Build salon filter for tenant isolation
+        if user.role == 'admin' and not user.salon_id:
+            salon_filter = ""
+            params = {}
         else:
-            # Salon-specific metrics (tenant isolation)
-            query = text("""
-                SELECT
-                    1 as total_salons,
-                    (SELECT COUNT(*) FROM users WHERE salon_id = :salon_id) as total_users,
-                    (SELECT COUNT(*) FROM appointments
-                     WHERE salon_id = :salon_id AND appointment_at::date = CURRENT_DATE) as todays_appointments,
-                    (SELECT COUNT(*) FROM appointments
-                     WHERE salon_id = :salon_id AND status = 'pending') as pending_appointments,
-                    (SELECT COUNT(*) FROM appointments
-                     WHERE salon_id = :salon_id AND status = 'confirmed') as confirmed_appointments,
-                    (SELECT COUNT(*) FROM appointments
-                     WHERE salon_id = :salon_id AND status = 'completed') as completed_appointments,
-                    (SELECT COUNT(*) FROM appointments
-                     WHERE salon_id = :salon_id AND status = 'no_show') as no_shows
-            """)
+            salon_filter = "WHERE a.salon_id = :salon_id"
+            params = {"salon_id": user.salon_id}
 
-        result = await db.execute(query, {"salon_id": user.salon_id})
+        # Query for real revenue + appointment stats
+        query = text(f"""
+            SELECT
+                COALESCE(SUM(CASE WHEN a.status IN ('completed', 'confirmed', 'pending') THEN a.final_price ELSE 0 END), 0) as total_revenue,
+                COUNT(*) as total_appointments,
+                COUNT(*) FILTER (WHERE a.appointment_at::date = CURRENT_DATE) as todays_appointments,
+                COUNT(*) FILTER (WHERE a.status = 'pending') as pending_appointments,
+                COUNT(*) FILTER (WHERE a.status = 'confirmed') as confirmed_appointments,
+                COUNT(*) FILTER (WHERE a.status = 'completed') as completed_appointments,
+                COUNT(DISTINCT a.customer_id) as unique_customers
+            FROM appointments a
+            {salon_filter}
+        """)
+
+        result = await db.execute(query, params)
         row = result.fetchone()
 
+        # Get revenue by service
+        service_query = text(f"""
+            SELECT
+                ss.name as service_name,
+                COUNT(*) as count,
+                COALESCE(SUM(a.final_price), 0) as revenue
+            FROM appointments a
+            JOIN salon_services ss ON a.service_id = ss.id
+            {salon_filter}
+            GROUP BY ss.name
+            ORDER BY revenue DESC
+        """)
+
+        service_result = await db.execute(service_query, params)
+        service_rows = service_result.fetchall()
+
+        revenue_by_service = [
+            {
+                "service": row.service_name,
+                "count": row.count,
+                "revenue": float(row.revenue) if row.revenue else 0
+            }
+            for row in service_rows
+        ]
+
         return {
-            "total_salons": row.total_salons if row else 0,
-            "total_users": row.total_users if row else 0,
+            "total_revenue": float(row.total_revenue) if row.total_revenue else 0,
+            "total_appointments": row.total_appointments if row else 0,
             "todays_appointments": row.todays_appointments if row else 0,
             "pending_appointments": row.pending_appointments if row else 0,
             "confirmed_appointments": row.confirmed_appointments if row else 0,
             "completed_appointments": row.completed_appointments if row else 0,
-            "no_shows": row.no_shows if row else 0
+            "unique_customers": row.unique_customers if row else 0,
+            "revenue_by_service": revenue_by_service,
         }
     except Exception as e:
         print(f"Error in kpis endpoint: {e}")
@@ -92,13 +107,14 @@ async def get_kpis(
         traceback.print_exc()
         return {
             "error": str(e),
-            "total_salons": 0,
-            "total_users": 0,
+            "total_revenue": 0,
+            "total_appointments": 0,
             "todays_appointments": 0,
             "pending_appointments": 0,
             "confirmed_appointments": 0,
             "completed_appointments": 0,
-            "no_shows": 0
+            "unique_customers": 0,
+            "revenue_by_service": [],
         }
 
 
@@ -107,7 +123,9 @@ async def get_kpis(
 # ============================================================================
 
 @router.get("/analytics/revenue/trends")
+@shared_limiter.limit("200 per minute")
 async def get_revenue_trends(
+    request: Request,
     days: int = Query(default=30, ge=1, le=365),
     db: AsyncSession = Depends(get_db),
     user: AuthenticatedUser = Depends(get_current_user),
@@ -158,7 +176,9 @@ async def get_revenue_trends(
 
 
 @router.get("/analytics/revenue/by-service")
+@shared_limiter.limit("200 per minute")
 async def get_revenue_by_service(
+    request: Request,
     days: int = Query(default=30, ge=1, le=365),
     db: AsyncSession = Depends(get_db),
     user: AuthenticatedUser = Depends(get_current_user),
@@ -204,7 +224,9 @@ async def get_revenue_by_service(
 # ============================================================================
 
 @router.get("/analytics/appointments/by-day-of-week")
+@shared_limiter.limit("200 per minute")
 async def get_appointments_by_day_of_week(
+    request: Request,
     days: int = Query(default=90, ge=7, le=365),
     db: AsyncSession = Depends(get_db),
     user: AuthenticatedUser = Depends(get_current_user),
@@ -247,7 +269,9 @@ async def get_appointments_by_day_of_week(
 
 
 @router.get("/analytics/appointments/by-hour")
+@shared_limiter.limit("200 per minute")
 async def get_appointments_by_hour(
+    request: Request,
     days: int = Query(default=30, ge=1, le=365),
     db: AsyncSession = Depends(get_db),
     user: AuthenticatedUser = Depends(get_current_user),
@@ -288,7 +312,9 @@ async def get_appointments_by_hour(
 
 
 @router.get("/analytics/appointments/status-breakdown")
+@shared_limiter.limit("200 per minute")
 async def get_appointment_status_breakdown(
+    request: Request,
     days: int = Query(default=30, ge=1, le=365),
     db: AsyncSession = Depends(get_db),
     user: AuthenticatedUser = Depends(get_current_user),
@@ -323,7 +349,9 @@ async def get_appointment_status_breakdown(
 
 
 @router.get("/analytics/appointments/cancellation-rate")
+@shared_limiter.limit("200 per minute")
 async def get_cancellation_rate(
+    request: Request,
     days: int = Query(default=30, ge=1, le=365),
     db: AsyncSession = Depends(get_db),
     user: AuthenticatedUser = Depends(get_current_user),
@@ -373,7 +401,9 @@ async def get_cancellation_rate(
 # ============================================================================
 
 @router.get("/analytics/staff/utilization")
+@shared_limiter.limit("200 per minute")
 async def get_staff_utilization(
+    request: Request,
     days: int = Query(default=30, ge=1, le=365),
     db: AsyncSession = Depends(get_db),
     user: AuthenticatedUser = Depends(get_current_user),
@@ -428,7 +458,9 @@ async def get_staff_utilization(
 # ============================================================================
 
 @router.get("/analytics/customers/new-vs-repeat")
+@shared_limiter.limit("200 per minute")
 async def get_new_vs_repeat_customers(
+    request: Request,
     days: int = Query(default=30, ge=1, le=365),
     db: AsyncSession = Depends(get_db),
     user: AuthenticatedUser = Depends(get_current_user),
@@ -471,7 +503,9 @@ async def get_new_vs_repeat_customers(
 
 
 @router.get("/analytics/customers/lifetime-value-distribution")
+@shared_limiter.limit("200 per minute")
 async def get_lifetime_value_distribution(
+    request: Request,
     db: AsyncSession = Depends(get_db),
     user: AuthenticatedUser = Depends(get_current_user),
 ) -> Dict[str, Any]:

@@ -15,6 +15,7 @@ from app.llm.service import LLMService
 from app.messaging.dispatcher import MessageDispatcher
 from app.redis.state_store import RedisStateStore
 from app.services.conversation_service import ConversationService
+from app.services.email_service import EmailService
 from app.services.notification_service import NotificationService
 from app.utils.logger import app_logger
 
@@ -65,6 +66,10 @@ def get_dispatcher(request: Request) -> MessageDispatcher:
     return request.app.state.dispatcher
 
 
+def get_email_service(request: Request) -> EmailService | None:
+    return request.app.state.email_service
+
+
 def get_conversation_service(
     request: Request,
     db: AsyncSession = Depends(get_db),
@@ -76,6 +81,7 @@ def get_conversation_service(
         state_store=get_state_store(request),
         llm_service=get_llm_service(request),
         dispatcher=get_dispatcher(request),
+        email_service=get_email_service(request),
     )
 
 

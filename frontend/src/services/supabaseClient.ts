@@ -11,11 +11,14 @@ export const supabase = isPlaceholder
   : createClient(supabaseUrl, supabaseAnonKey, {
       global: {
         // Wrap fetch with a 5s timeout to prevent infinite hangs
-        fetch: (...args: Parameters<typeof fetch>) => {
+        fetch: async (input: RequestInfo | URL, init?: RequestInit) => {
           const controller = new AbortController();
           const timeoutId = setTimeout(() => controller.abort(), 5000);
-          return fetch(...args, { signal: controller.signal })
-            .finally(() => clearTimeout(timeoutId));
+          try {
+            return await fetch(input, { ...init, signal: controller.signal });
+          } finally {
+            clearTimeout(timeoutId);
+          }
         },
       },
     });

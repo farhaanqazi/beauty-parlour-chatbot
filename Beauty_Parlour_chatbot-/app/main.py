@@ -24,10 +24,12 @@ from app.llm.service import LLMService
 from app.middleware.exception_handler import build_exception_handler
 from app.middleware.rate_limiter import limiter as shared_limiter
 from app.middleware.request_id import RequestIDMiddleware
+from app.middleware.request_timing import RequestTimingMiddleware
 from app.middleware.security_headers import SecurityHeadersMiddleware
 from app.messaging.dispatcher import MessageDispatcher
 from app.redis.client import build_redis_client
 from app.redis.state_store import RedisStateStore
+from app.services.email_service import EmailService
 from app.utils.logger import app_logger
 
 
@@ -68,6 +70,7 @@ async def lifespan(app: FastAPI):
         app.state.state_store = RedisStateStore(redis_client, settings.effective_session_ttl_seconds)
         app.state.llm_service = LLMService(settings)
         app.state.dispatcher = MessageDispatcher(settings, http_client)
+        app.state.email_service = EmailService(settings)
         
         # Log startup information
         logger.info(
@@ -156,6 +159,7 @@ app.add_middleware(
 app.add_middleware(SecurityHeadersMiddleware)
 # 2. Request ID (pure ASGI — avoids Starlette's ExceptionGroup bug)
 app.add_middleware(RequestIDMiddleware)
+app.add_middleware(RequestTimingMiddleware)
 # 3. CORS
 app.add_middleware(
     CORSMiddleware,

@@ -23,7 +23,7 @@ BASE_FLOW_CONFIG: dict[str, Any] = {
         "Service: {service}\n"
         "Date: {date}\n"
         "Time: {time}\n"
-        "Reply YES to confirm or NO to cancel."
+        "\nTap YES to confirm or NO to cancel."
     ),
 }
 
@@ -50,6 +50,8 @@ NO_TOKENS = {
     "no thanks",
 }
 RESET_TOKENS = {"restart", "start", "menu", "reset", "start over", "hi", "hello"}
+RESTART_TOKENS = {"restart", "start over", "back to start", "cancel booking"}
+GREETING_TOKENS = {"hi", "hello"}
 
 
 def build_flow_config(salon_flow_config: dict[str, Any] | None) -> dict[str, Any]:

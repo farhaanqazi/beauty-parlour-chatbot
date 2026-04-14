@@ -29,6 +29,7 @@ export interface DashboardAppointment {
   appointment_at: string;
   status: string;
   phone_number: string | null;
+  final_price?: number;
   service?: {
     price: number;
   };
@@ -83,6 +84,7 @@ export const fetchUpcomingAppointments = async (salonSlug: string, hours: number
     appointment_at: apt.appointment_at,
     status: apt.status,
     phone_number: null,
+    final_price: apt.final_price,
   }));
 };
 

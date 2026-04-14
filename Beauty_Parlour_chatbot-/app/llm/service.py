@@ -55,10 +55,12 @@ class LLMService:
         self.settings = settings
         self.client: AsyncGroq | None = None
         if settings.llm_api_key:
-            self.client = AsyncGroq(
-                api_key=settings.llm_api_key,
-                base_url=settings.llm_base_url,
-            )
+            # Only pass base_url if it's set and not the default
+            # The Groq SDK defaults to the correct URL automatically
+            client_kwargs = {"api_key": settings.llm_api_key}
+            if settings.llm_base_url and "YOUR_" not in settings.llm_base_url and settings.llm_base_url != "https://api.groq.com/openai/v1":
+                client_kwargs["base_url"] = settings.llm_base_url
+            self.client = AsyncGroq(**client_kwargs)
 
     async def classify_option(
         self,
@@ -104,12 +106,18 @@ class LLMService:
 
         payload = await self._json_completion(
             system_prompt=(
-                "Extract one appointment date. Return JSON only with keys iso_date and confidence. "
-                "Use ISO format YYYY-MM-DD. If unclear, iso_date must be null."
+                "You are a date extraction expert. Extract the intended appointment date from the user's message. "
+                "Return JSON only with keys iso_date (YYYY-MM-DD) and confidence (0-1). "
+                "CRITICAL: Handle relative dates correctly! "
+                "- 'Today' = reference_date. "
+                "- 'Tomorrow' = reference_date + 1 day. "
+                "- 'Day after Tuesday' = The day after the NEXT Tuesday. "
+                "- 'Next Friday' = The Friday of next week. "
+                "If unclear, iso_date must be null."
             ),
             user_prompt=(
                 f"Timezone: {timezone_name}\n"
-                f"Reference date: {reference_date.isoformat()}\n"
+                f"Reference date (Today): {reference_date.isoformat()}\n"
                 f"User language: {language or 'unknown'}\n"
                 f"User message: {sanitized_msg}"
             ),
@@ -133,8 +141,13 @@ class LLMService:
 
         payload = await self._json_completion(
             system_prompt=(
-                "Extract one appointment time. Return JSON only with keys iso_time and confidence. "
-                "Use 24-hour HH:MM format. If unclear, iso_time must be null."
+                "You are a time extraction expert. Extract the intended appointment time from the user's message. "
+                "Return JSON only with keys iso_time (HH:MM 24-hour format) and confidence (0-1). "
+                "CRITICAL: Context is a beauty salon booking. "
+                "- Single digits like '3' or '4' usually mean 3:00 PM (15:00) or 4:00 PM (16:00), NOT morning. "
+                "- '3.30' means 15:30. "
+                "- 'Half past 5' means 17:30. "
+                "If unclear, iso_time must be null."
             ),
             user_prompt=(
                 f"Timezone: {timezone_name}\n"

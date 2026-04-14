@@ -93,8 +93,10 @@ def setup_logging() -> None:
     """
     settings = get_settings()
 
-    # Create logs directory
-    log_dir = Path("logs")
+    # Create logs directory (use absolute path relative to project root)
+    # This ensures logs are created in the correct location regardless of CWD
+    project_root = Path(__file__).resolve().parent.parent.parent
+    log_dir = project_root / "logs"
     log_dir.mkdir(exist_ok=True)
 
     # Determine log level based on environment

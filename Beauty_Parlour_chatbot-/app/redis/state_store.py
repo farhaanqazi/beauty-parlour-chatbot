@@ -66,3 +66,32 @@ class RedisStateStore:
                 error_message=str(e),
             )
             raise
+
+    async def is_message_processed(self, salon_id: str, channel: str, external_user_id: str, message_id: str) -> bool:
+        """Check if a message has already been processed (deduplication)."""
+        if not message_id:
+            return False
+        key = f"msg:{salon_id}:{channel}:{external_user_id}:{message_id}"
+        try:
+            exists = await self.redis_client.exists(key)
+            return bool(exists)
+        except Exception:
+            return False
+
+    async def mark_message_processed(self, salon_id: str, channel: str, external_user_id: str, message_id: str) -> None:
+        """Mark a message as processed to prevent duplicate processing."""
+        if not message_id:
+            return
+        key = f"msg:{salon_id}:{channel}:{external_user_id}:{message_id}"
+        try:
+            # Store for 1 hour (enough for webhook retries)
+            await self.redis_client.set(key, "1", ex=3600)
+        except Exception as e:
+            app_logger.error(
+                "Failed to mark message processed",
+                event="redis_error",
+                operation="SET",
+                key=key,
+                error_type=type(e).__name__,
+                error_message=str(e),
+            )

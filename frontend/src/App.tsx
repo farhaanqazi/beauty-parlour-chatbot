@@ -13,6 +13,7 @@ const ServicesManagement = lazy(() => import('./pages/ServicesManagement'));
 const UserManagement = lazy(() => import('./pages/UserManagement'));
 const CustomerDetail = lazy(() => import('./pages/CustomerDetail'));
 const AdminDashboard = lazy(() => import('./pages/AdminDashboard'));
+const SalonOwnerDashboard = lazy(() => import('./pages/SalonOwnerDashboard'));
 const ReceptionDashboard = lazy(() => import('./pages/ReceptionDashboard'));
 const Analytics = lazy(() => import('./pages/Analytics'));
 const Reports = lazy(() => import('./pages/Reports'));
@@ -100,12 +101,21 @@ const App = () => {
                 }
               />
 
-              {/* TIER 2: Admin & Reception Dashboards */}
+              {/* TIER 2: Admin & Owner & Reception Dashboards */}
               <Route
                 path="/admin/dashboard"
                 element={
                   <ProtectedRoute allowedRoles={['admin']}>
                     <AdminDashboard />
+                  </ProtectedRoute>
+                }
+              />
+
+              <Route
+                path="/owner/dashboard"
+                element={
+                  <ProtectedRoute allowedRoles={['salon_owner']}>
+                    <SalonOwnerDashboard />
                   </ProtectedRoute>
                 }
               />

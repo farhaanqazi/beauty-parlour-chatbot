@@ -30,11 +30,15 @@ class AppointmentStatus(str, Enum):
 class ConversationStep(str, Enum):
     GREETING = "greeting"
     LANGUAGE = "language"
+    CUSTOMER_NAME = "customer_name"
     MARRIAGE_TYPE = "marriage_type"
     SERVICE = "service"
     SAMPLE_IMAGES = "sample_images"
     APPOINTMENT_DATE = "appointment_date"
+    DATE_CONFIRMATION = "date_confirmation"
     APPOINTMENT_TIME = "appointment_time"
+    TIME_CONFIRMATION = "time_confirmation"  # New step for time verification
+    EMAIL = "email"
     CONFIRMATION = "confirmation"
     COMPLETE = "complete"
 

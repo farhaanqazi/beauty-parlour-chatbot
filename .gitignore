@@ -35,3 +35,6 @@ frontend/*.local
 .idea/
 *.swp
 *.swo
+
+# Private Planning Documents
+Beauty_Parlour_chatbot-/docs/FUTURE_DB_PLAN.md

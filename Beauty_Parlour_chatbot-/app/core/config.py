@@ -34,7 +34,7 @@ class Settings(BaseSettings):
 
     # LLM Configuration
     groq_api_key: Optional[str] = Field(default=None, validation_alias=AliasChoices("GROQ_API_KEY"))
-    groq_model: str = Field(default="qwen/qwen3-1.5b", validation_alias=AliasChoices("GROQ_MODEL"))
+    groq_model: str = Field(default="llama-3.3-70b-versatile", validation_alias=AliasChoices("GROQ_MODEL"))
     groq_base_url: str = Field(
         default="https://api.groq.com/openai/v1",
         validation_alias=AliasChoices("GROQ_BASE_URL"),
@@ -106,6 +106,14 @@ class Settings(BaseSettings):
         default="your-supabase-jwt-secret-here",
         validation_alias=AliasChoices("SUPABASE_JWT_SECRET"),
     )
+
+    # Email Configuration
+    email_smtp_host: str = Field(default="", validation_alias=AliasChoices("EMAIL_SMTP_HOST"))
+    email_smtp_port: int = Field(default=587, validation_alias=AliasChoices("EMAIL_SMTP_PORT"))
+    email_smtp_user: str = Field(default="", validation_alias=AliasChoices("EMAIL_SMTP_USER"))
+    email_smtp_password: str = Field(default="", validation_alias=AliasChoices("EMAIL_SMTP_PASSWORD"))
+    email_from: str = Field(default="", validation_alias=AliasChoices("EMAIL_FROM"))
+    salon_owner_email: str = Field(default="", validation_alias=AliasChoices("SALON_OWNER_EMAIL"))
 
     @property
     def cors_origins_list(self) -> list[str]:

@@ -105,6 +105,12 @@ const StatusBadge = ({ status }: { status: string }) => {
 };
 
 const AppointmentRow = ({ appointment, onCheckIn, isUpdating }: { appointment: any, onCheckIn: () => void, isUpdating: boolean }) => {
+    const date = new Date(appointment.appointment_at).toLocaleDateString('en-US', {
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric',
+    });
+
     const time = new Date(appointment.appointment_at).toLocaleTimeString('en-US', { 
       hour: 'numeric', 
       minute: '2-digit',
@@ -116,7 +122,10 @@ const AppointmentRow = ({ appointment, onCheckIn, isUpdating }: { appointment: a
     return (
       <div className="flex items-center justify-between p-4 bg-white hover:bg-neutral-50 rounded-xl border border-neutral-200 shadow-sm transition-colors">
         <div className="flex items-center gap-4 flex-1 min-w-0">
-          <div className="text-xl font-bold text-blue-600 w-24 text-center" style={{fontFamily: 'Fira Code, monospace'}}>{time}</div>
+          <div className="text-center" style={{fontFamily: 'Fira Code, monospace'}}>
+            <div className="text-sm font-semibold text-neutral-600 mb-1">{date}</div>
+            <div className="text-xl font-bold text-blue-600 w-24">{time}</div>
+          </div>
           <div className="flex-1 min-w-0">
             <p className="font-semibold text-lg text-neutral-900 truncate">{appointment.customer_name}</p>
             <p className="text-md text-neutral-500 truncate">{appointment.service_name}</p>

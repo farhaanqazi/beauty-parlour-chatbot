@@ -20,6 +20,7 @@ interface Appointment {
   customer: string;
   appointment_at: string;
   status: 'pending' | 'confirmed' | 'completed' | 'cancelled';
+  final_price?: number;
 }
 
 interface FilterState {
@@ -101,6 +102,7 @@ export default function AppointmentsList() {
 
   const formatTime = (dateStr: string) => {
     return new Date(dateStr).toLocaleString('en-US', {
+      year: 'numeric',
       month: 'short',
       day: 'numeric',
       hour: '2-digit',
@@ -261,6 +263,9 @@ export default function AppointmentsList() {
                       Date & Time
                     </th>
                     <th className="px-6 py-4 text-left text-sm font-semibold text-neutral-900">
+                      Price
+                    </th>
+                    <th className="px-6 py-4 text-left text-sm font-semibold text-neutral-900">
                       Status
                     </th>
                     <th className="px-6 py-4 text-center text-sm font-semibold text-neutral-900">
@@ -285,6 +290,9 @@ export default function AppointmentsList() {
                       </td>
                       <td className="px-6 py-4 text-sm text-neutral-900">
                         {formatTime(apt.appointment_at)}
+                      </td>
+                      <td className="px-6 py-4 text-sm text-neutral-900 font-medium">
+                        {apt.final_price ? `₹${apt.final_price.toFixed(2)}` : '-'}
                       </td>
                       <td className="px-6 py-4">
                         <div

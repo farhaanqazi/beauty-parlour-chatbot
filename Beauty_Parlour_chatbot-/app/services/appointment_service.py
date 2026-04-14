@@ -13,12 +13,14 @@ from app.db.models.customer import Customer
 from app.db.models.salon import Salon, SalonService
 from app.db.models.common import utc_now
 from app.schemas.state import ConversationState
+from app.services.email_service import EmailService
 from app.utils.logger import app_logger
 
 
 class AppointmentService:
-    def __init__(self, db: AsyncSession) -> None:
+    def __init__(self, db: AsyncSession, email_service: EmailService | None = None) -> None:
         self.db = db
+        self.email_service = email_service
 
     async def create_appointment(
         self,
@@ -91,8 +93,7 @@ class AppointmentService:
                         overlapping_booking=str(overlap.id),
                     )
                     raise ValueError(
-                        f"Slot {state.slots.appointment_time} on {state.slots.appointment_date} is already booked. "
-                        "Please choose a different time."
+                        "This time slot is already booked. Please choose another."
                     )
 
                 appointment = Appointment(
@@ -106,6 +107,7 @@ class AppointmentService:
                     marriage_type=state.slots.marriage_type or "Unknown",
                     service_name_snapshot=service.name,
                     appointment_at=appointment_at,
+                    final_price=service.price,
                     booking_payload=state.model_dump(mode="json"),
                 )
                 self.db.add(appointment)
@@ -123,6 +125,10 @@ class AppointmentService:
                     salon_id=str(salon.id),
                     service_id=str(service.id),
                 )
+                
+                # Send emails if email service is configured
+                await self._send_booking_emails(appointment, salon, state)
+                
                 return appointment
 
     async def cancel_appointment(
@@ -285,9 +291,10 @@ class AppointmentService:
         buffer_end = new_end + timedelta(minutes=buffer_minutes)
 
         # Find existing appointments that could overlap (broad window)
+        from sqlalchemy.orm import selectinload
         statement = (
             select(Appointment)
-            .options(joinedload(Appointment.service))
+            .options(selectinload(Appointment.service), selectinload(Appointment.customer))
             .where(
                 Appointment.salon_id == salon_id,
                 Appointment.status.in_([AppointmentStatus.CONFIRMED]),
@@ -338,3 +345,40 @@ class AppointmentService:
     @staticmethod
     def _generate_booking_reference() -> str:
         return f"BP-{uuid4().hex[:8].upper()}"
+
+    async def _send_booking_emails(
+        self,
+        appointment: Appointment,
+        salon: Salon,
+        state: ConversationState,
+    ) -> None:
+        """Send confirmation email to customer and notification to owner."""
+        if not self.email_service or not state.slots.email:
+            return
+
+        date_str = state.slots.appointment_date.strftime("%d %b %Y")
+        time_str = state.slots.appointment_time.strftime("%I:%M %p")
+        
+        # Send to customer
+        await self.email_service.send_appointment_confirmation(
+            to_email=state.slots.email,
+            customer_name=state.slots.customer_name or "Valued Customer",
+            salon_name=salon.name,
+            service_name=state.slots.service_name or appointment.service_name_snapshot,
+            appointment_date=date_str,
+            appointment_time=time_str,
+            booking_reference=appointment.booking_reference,
+        )
+        
+        # Send to salon owner
+        owner_email = self.email_service.settings.salon_owner_email
+        if owner_email:
+            await self.email_service.send_owner_notification(
+                owner_email=owner_email,
+                salon_name=salon.name,
+                customer_email=state.slots.email,
+                service_name=state.slots.service_name or appointment.service_name_snapshot,
+                appointment_date=date_str,
+                appointment_time=time_str,
+                booking_reference=appointment.booking_reference,
+            )

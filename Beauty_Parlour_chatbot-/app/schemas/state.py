@@ -10,12 +10,14 @@ from app.core.enums import ChannelType, ConversationStep
 
 class ConversationSlots(BaseModel):
     language: str | None = None
+    customer_name: str | None = None
     marriage_type: str | None = None
     service_id: str | None = None
     service_name: str | None = None
     wants_sample_images: bool | None = None
     appointment_date: date | None = None
     appointment_time: time | None = None
+    email: str | None = None
 
 
 class ConversationState(BaseModel):
@@ -24,6 +26,8 @@ class ConversationState(BaseModel):
     channel: ChannelType
     external_user_id: str
     step: ConversationStep = ConversationStep.GREETING
+    previous_step: ConversationStep | None = None
+    awaiting_greeting: bool = False
     slots: ConversationSlots = Field(default_factory=ConversationSlots)
     attempt_count: int = 0
     is_complete: bool = False

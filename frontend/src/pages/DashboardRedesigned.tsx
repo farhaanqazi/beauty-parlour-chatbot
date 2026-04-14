@@ -197,7 +197,7 @@ const AppointmentRow = ({ appointment }: { appointment: any }) => {
     if (appointment.appointment_at) {
       const dateObj = new Date(appointment.appointment_at);
       time = dateObj.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true });
-      dateStr = dateObj.toLocaleDateString('en-GB', { day: '2-digit', month: 'short' }); // e.g., "09 Apr"
+      dateStr = dateObj.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }); // e.g., "09 Apr 2026"
     }
   } catch (e) {
     console.error("Date parse error", e);
@@ -229,7 +229,10 @@ const AppointmentRow = ({ appointment }: { appointment: any }) => {
       <div className="flex items-center gap-4">
         <div className="text-right hidden sm:block">
           <p className="text-sm font-medium text-[var(--color-neutral-200)]">{time}</p>
-          <p className="text-xs text-[var(--color-neutral-500)]">{dateStr}</p>
+          <p className="text-xs text-[var(--color-neutral-500)]">
+            {dateStr}
+            {appointment.final_price ? ` • ₹${Number(appointment.final_price).toFixed(2)}` : ''}
+          </p>
         </div>
         <StatusBadge status={appointment.status || 'pending'} />
       </div>
@@ -342,8 +345,8 @@ const DashboardRedesigned = () => {
   const navigate = useNavigate();
 
   // Fetch real data from Supabase via backend
-  const { data: stats, isLoading: statsLoading, error: statsError, refetch: refetchStats } = useDashboardStats();
-  const { data: allAppointments, isLoading: allLoading, refetch: refetchAll } = useAllAppointments();
+  const { isLoading: statsLoading, error: statsError, refetch: refetchStats } = useDashboardStats();
+  const { data: allAppointments, isLoading: allLoading } = useAllAppointments();
   const { data: staff, isLoading: staffLoading } = useStaffList();
 
   // Filter appointments based on search AND active filter

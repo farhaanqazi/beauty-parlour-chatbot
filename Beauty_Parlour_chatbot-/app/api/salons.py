@@ -2,20 +2,23 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import select
 from sqlalchemy.orm import joinedload
 
 from app.api.deps import get_db, get_current_user, require_roles, AuthenticatedUser
 from app.db.models.salon import Salon, SalonService, SalonChannel
 from app.services.tenant_service import TenantService
+from app.middleware.rate_limiter import limiter as shared_limiter
 
 
 router = APIRouter(tags=["salons"])
 
 
 @router.get("/salons")
+@shared_limiter.limit("200 per minute")
 async def list_salons(
+    request: Request,
     db=Depends(get_db),
     user: AuthenticatedUser = Depends(require_roles("admin")),
 ) -> dict:
@@ -59,7 +62,9 @@ async def list_salons(
 
 
 @router.get("/salons/{salon_id}")
+@shared_limiter.limit("200 per minute")
 async def get_salon(
+    request: Request,
     salon_id: UUID,
     db=Depends(get_db),
     user: AuthenticatedUser = Depends(require_roles("admin", "salon_owner", "reception")),
@@ -129,7 +134,8 @@ async def get_salon(
 
 
 @router.get("/salons/{salon_slug}/details")
-async def get_salon_by_slug(salon_slug: str, db=Depends(get_db)) -> dict:
+@shared_limiter.limit("200 per minute")
+async def get_salon_by_slug(request: Request, salon_slug: str, db=Depends(get_db)) -> dict:
     """
     Get salon details by slug (public endpoint for chatbot).
     """

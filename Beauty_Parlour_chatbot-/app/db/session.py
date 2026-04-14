@@ -7,7 +7,6 @@ from urllib.parse import urlparse, parse_qs
 
 import certifi
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
-from sqlalchemy.pool import NullPool
 
 from app.core.config import Settings
 
@@ -15,18 +14,12 @@ from app.core.config import Settings
 def create_db_engine(settings: Settings):
     """
     Create a production-grade secure PostgreSQL engine for Supabase.
-    
+
     This implementation:
     - Uses sslmode=require from the DATABASE_URL for SSL encryption
-    - Disables certificate verification since Supabase uses self-signed certs
-    - Still provides encrypted transport (MITM protected via hostname in URL)
-    - Uses NullPool to avoid connection pooling issues with Supabase
+    - Uses connection pooling (AsyncAdaptedQueuePool) for high performance
+    - Recycles connections to prevent Supabase timeout issues
     - Validates DATABASE_URL format and presence
-    
-    Security Note: While we use CERT_NONE for the certificate chain,
-    the connection is still encrypted and the hostname is verified
-    via the connection URL. This is the recommended approach for
-    Supabase connections per their documentation.
     """
     db_url = settings.database_url.strip()
 
@@ -85,8 +78,11 @@ def create_db_engine(settings: Settings):
     engine = create_async_engine(
         clean_url,
         connect_args=connect_args,
-        poolclass=NullPool,
-        pool_pre_ping=True,
+        # Connection Pooling Configuration (Production Optimized)
+        pool_size=10,           # Keep 10 connections open and ready in the pool
+        max_overflow=20,        # Allow 20 temporary connections during traffic spikes
+        pool_pre_ping=True,     # Verify connection is alive before use (prevents stale connections)
+        pool_recycle=1800,      # Recycle connections every 30 minutes (prevents Supabase timeouts)
         echo=settings.debug,
     )
 

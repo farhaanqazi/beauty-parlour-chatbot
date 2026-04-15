@@ -1,5 +1,7 @@
 from __future__ import annotations
+import asyncio
 from collections.abc import AsyncIterator
+from functools import partial
 from typing import Optional
 
 from fastapi import Depends, HTTPException, Request, status
@@ -158,8 +160,10 @@ async def get_current_user(
             event="auth_attempt",
             auth_scheme="bearer",
         )
-        # Supabase SDK verifies the token (HS256 or ES256) via its auth server
-        auth_user = admin.auth.get_user(token)
+        # admin.auth.get_user() is synchronous (makes an HTTP request to Supabase).
+        # Run it in a thread pool so it does not block the async event loop.
+        loop = asyncio.get_event_loop()
+        auth_user = await loop.run_in_executor(None, partial(admin.auth.get_user, token))
         user_id = auth_user.user.id
 
     except Exception as e:

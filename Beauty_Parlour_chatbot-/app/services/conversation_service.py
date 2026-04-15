@@ -181,7 +181,7 @@ class ConversationService:
                         OutboundInstruction(
                             text="I couldn't find any upcoming appointments for you. Would you like to book a new one?",
                             buttons=[
-                                {"label": "📅 Book New Appointment", "callback": "action_book_new"},
+                                {"label": "📅 Book", "callback": "action_book_new"},
                                 {"label": "🔄 Start Over", "callback": "restart_flow"},
                             ],
                         )
@@ -189,53 +189,66 @@ class ConversationService:
                     result.state.intent = UserIntent.NEW_BOOKING
                     result.state.step = ConversationStep.GREETING
                 else:
-                    # Display the first (soonest) appointment with action buttons
-                    apt: Appointment = upcoming[0]
-                    local_time = apt.appointment_at.astimezone(ZoneInfo(salon.timezone))
-                    date_str = local_time.strftime("%A, %d %b %Y")
-                    time_str = local_time.strftime("%I:%M %p")
-
-                    # Pre-fill state with appointment data for rescheduling
-                    result.state.target_appointment_id = str(apt.id)
-                    result.state.slots.service_id = str(apt.service_id) if apt.service_id else None
-                    result.state.slots.service_name = apt.service_name_snapshot
-                    result.state.slots.appointment_date = local_time.date()
-                    result.state.slots.appointment_time = local_time.time()
-                    result.state.slots.customer_name = customer.display_name
-
-                    # If multiple appointments, show them all
+                    # If multiple appointments, let user select which one to manage
                     if len(upcoming) > 1:
+                        # Store all appointment IDs in state metadata for numeric selection
+                        appointment_ids = [str(a.id) for a in upcoming]
+                        state.metadata['appointment_ids'] = appointment_ids
+                        
+                        # Build numbered list of appointments (clean text format - no buttons)
                         apt_list = "\n".join(
-                            f"• {a.service_name_snapshot} — {a.appointment_at.astimezone(ZoneInfo(salon.timezone)).strftime('%d %b, %I:%M %p')}"
-                            for a in upcoming
+                            f"{i+1}. {a.service_name_snapshot} — {a.appointment_at.astimezone(ZoneInfo(salon.timezone)).strftime('%d %b, %I:%M %p')}"
+                            for i, a in enumerate(upcoming)
                         )
-                        header_text = (
-                            f"I found {len(upcoming)} upcoming appointments:\n\n{apt_list}\n\n"
-                            f"Here's your next one:\n"
-                        )
-                    else:
-                        header_text = "Here's your upcoming appointment:\n\n"
 
-                    result.messages = [
-                        OutboundInstruction(
-                            text=(
-                                f"{header_text}"
-                                f"📋 **{apt.service_name_snapshot}**\n"
-                                f"Ref: {apt.booking_reference}\n"
-                                f"📅 {date_str}\n"
-                                f"⏰ {time_str}\n\n"
-                                f"What would you like to do?"
-                            ),
-                            buttons=[
-                                {"label": "🔄 Reschedule", "callback": "action_reschedule"},
-                                {"label": "❌ Cancel", "callback": "action_cancel"},
-                                {"label": "✅ Keep as is", "callback": "action_keep"},
-                                {"label": "🔄 Start Over", "callback": "restart_flow"},
-                            ],
-                        )
-                    ]
-                    # Set step to MANAGE_APPOINTMENT_MENU so the engine handles subsequent actions
-                    result.state.step = ConversationStep.MANAGE_APPOINTMENT_MENU
+                        result.messages = [
+                            OutboundInstruction(
+                                text=(
+                                    f"I found {len(upcoming)} upcoming appointments:\n\n"
+                                    f"{apt_list}\n\n"
+                                    f"Reply with the number to manage (e.g., type *1* or *2*)"
+                                ),
+                                buttons=[
+                                    {"label": "🔄 Start Over", "callback": "restart_flow"},
+                                ],
+                            )
+                        ]
+                        result.state.step = ConversationStep.SELECT_APPOINTMENT
+                    else:
+                        # Single appointment - proceed directly to action menu
+                        apt: Appointment = upcoming[0]
+                        local_time = apt.appointment_at.astimezone(ZoneInfo(salon.timezone))
+                        date_str = local_time.strftime("%A, %d %b %Y")
+                        time_str = local_time.strftime("%I:%M %p")
+
+                        # Pre-fill state with appointment data for rescheduling
+                        result.state.target_appointment_id = str(apt.id)
+                        result.state.slots.service_id = str(apt.service_id) if apt.service_id else None
+                        result.state.slots.service_name = apt.service_name_snapshot
+                        result.state.slots.appointment_date = local_time.date()
+                        result.state.slots.appointment_time = local_time.time()
+                        result.state.slots.customer_name = customer.display_name
+
+                        result.messages = [
+                            OutboundInstruction(
+                                text=(
+                                    f"Here's your upcoming appointment:\n\n"
+                                    f"📋 **{apt.service_name_snapshot}**\n"
+                                    f"Ref: {apt.booking_reference}\n"
+                                    f"📅 {date_str}\n"
+                                    f"⏰ {time_str}\n\n"
+                                    f"What would you like to do?"
+                                ),
+                                buttons=[
+                                    {"label": "🔄 Reschedule", "callback": "action_reschedule"},
+                                    {"label": "❌ Cancel", "callback": "action_cancel"},
+                                    {"label": "✅ Keep", "callback": "action_keep"},
+                                    {"label": "🔄 Start Over", "callback": "restart_flow"},
+                                ],
+                            )
+                        ]
+                        # Set step to MANAGE_APPOINTMENT_MENU so the engine handles subsequent actions
+                        result.state.step = ConversationStep.MANAGE_APPOINTMENT_MENU
             # --- END MANAGE APPOINTMENT LOOKUP INTERCEPT ---
 
             # --- APPOINTMENT TIME VALIDATION INTERCEPT ---
@@ -256,7 +269,7 @@ class ConversationService:
                     if service_id_str:
                         service = await self.appointment_service._get_service(UUID(service_id_str))
                         if service:
-                            overlap = await self.appointment_service._check_availability(salon.id, appointment_at, service)
+                            overlap = await self.appointment_service._check_availability_locked(salon.id, appointment_at, service)
                             if overlap:
                                 raise ValueError("This time slot is already booked. Please choose another.")
                 except ValueError as e:
@@ -328,6 +341,9 @@ class ConversationService:
                             OutboundInstruction(text="Could not find the appointment to cancel.")
                         ]
                     booking_reference = None
+                    
+                    # Commit the transaction to persist the cancellation
+                    await self.db.commit()
                 except Exception as e:
                     app_logger.error(
                         "Failed to cancel appointment via chatbot",
@@ -366,6 +382,9 @@ class ConversationService:
                             )
                         ]
                         booking_reference = updated.booking_reference
+                        
+                        # Commit the transaction to persist the reschedule changes
+                        await self.db.commit()
                     else:
                         instructions = [
                             OutboundInstruction(text="Could not find the appointment or missing details to reschedule.")
@@ -411,6 +430,9 @@ class ConversationService:
 
             elif result.should_create_appointment:
                 # ONLY write to DB when appointment is confirmed
+                # Materialize IDs before try block so error handler doesn't touch expired ORM objects
+                _salon_id = str(salon.id)
+                _customer_id = str(customer.id)
                 try:
                     appointment = await self.appointment_service.create_appointment(salon, customer, result.state)
                     booking_reference = appointment.booking_reference
@@ -468,8 +490,8 @@ class ConversationService:
                     app_logger.warn(
                         "Booking validation error detected",
                         event="booking_validation_error",
-                        salon_id=str(salon.id),
-                        customer_id=str(customer.id),
+                        salon_id=_salon_id,
+                        customer_id=_customer_id,
                         error=error_message,
                     )
 

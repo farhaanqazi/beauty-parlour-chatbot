@@ -231,7 +231,7 @@ class AppointmentService:
             .where(Appointment.id == appointment_id)
         )
         result = await self.db.execute(statement)
-        return result.scalar_one_or_none()
+        return result.unique().scalar_one_or_none()
 
     async def list_appointments(
         self,
@@ -432,15 +432,23 @@ class AppointmentService:
     # ------------------------------------------------------------------
 
     async def _cancel_notification_jobs(self, appointment_id: UUID) -> None:
-        """Delete all pending/processing notification jobs for an appointment."""
+        """Delete ALL notification jobs for an appointment (any status).
+
+        Removes SENT jobs too so that rescheduling can insert fresh jobs
+        without hitting the unique (appointment_id, job_type) constraint.
+        """
         statement = select(NotificationJob).where(
             NotificationJob.appointment_id == appointment_id,
-            NotificationJob.status.in_([NotificationJobStatus.PENDING, NotificationJobStatus.PROCESSING]),
         )
         result = await self.db.execute(statement)
         jobs = result.scalars().all()
         for job in jobs:
             await self.db.delete(job)
+        # Flush DELETEs immediately so the unique constraint (appointment_id, job_type)
+        # is cleared before _schedule_default_notification_jobs inserts new rows.
+        # PostgreSQL enforces non-deferrable constraints per-statement, so without
+        # this flush the DELETE and INSERT land in the same batch and conflict.
+        await self.db.flush()
 
     async def _schedule_default_notification_jobs(self, appointment: Appointment) -> None:
         """
@@ -470,12 +478,7 @@ class AppointmentService:
             )
             self.db.add(job)
 
-        try:
-            await self.db.flush()
-        except IntegrityError:
-            # Unique constraint on (appointment_id, job_type) — jobs already exist.
-            # This is safe to ignore (idempotency).
-            await self.db.rollback()
+        await self.db.flush()
 
     # ------------------------------------------------------------------
     # AVAILABILITY CHECKS (with row-level locking to prevent race conditions)
@@ -510,7 +513,7 @@ class AppointmentService:
                 Appointment.appointment_at >= buffer_start,
                 Appointment.appointment_at <= buffer_end,
             )
-            .with_for_update(skip_locked=True)  # Lock to prevent concurrent writes
+            .with_for_update()  # Block concurrent transactions — skip_locked would silently miss locked rows and allow double-bookings
         )
         result = await self.db.execute(statement)
         existing_appointments = result.scalars().unique().all()
@@ -559,7 +562,7 @@ class AppointmentService:
                 Appointment.appointment_at <= buffer_end,
                 Appointment.id != exclude_id,
             )
-            .with_for_update(skip_locked=True)
+            .with_for_update()  # Block concurrent transactions — skip_locked would silently miss locked rows and allow double-bookings
         )
         result = await self.db.execute(statement)
         existing_appointments = result.scalars().unique().all()

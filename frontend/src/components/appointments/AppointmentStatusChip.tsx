@@ -4,9 +4,10 @@ interface AppointmentStatusChipProps {
   status: AppointmentStatus;
 }
 
-const statusConfig: Record<AppointmentStatus, { label: string; color: 'default' | 'primary' | 'success' | 'error' | 'warning' }> = {
+const statusConfig: Record<AppointmentStatus, { label: string; color: 'default' | 'primary' | 'success' | 'error' | 'warning' | 'info' }> = {
   pending: { label: 'Pending', color: 'default' },
   confirmed: { label: 'Confirmed', color: 'primary' },
+  in_progress: { label: 'In Progress', color: 'info' },
   completed: { label: 'Completed', color: 'success' },
   cancelled_by_client: { label: 'Cancelled by Client', color: 'error' },
   cancelled_by_salon: { label: 'Cancelled by Salon', color: 'error' },
@@ -19,6 +20,7 @@ const statusConfig: Record<AppointmentStatus, { label: string; color: 'default' 
 const colorClasses: Record<string, string> = {
   default: 'bg-neutral-100 text-neutral-700 border-neutral-200',
   primary: 'bg-blue-100 text-blue-700 border-blue-200',
+  info: 'bg-purple-100 text-purple-700 border-purple-200',
   success: 'bg-green-100 text-green-700 border-green-200',
   error: 'bg-red-100 text-red-700 border-red-200',
   warning: 'bg-amber-100 text-amber-700 border-amber-200',

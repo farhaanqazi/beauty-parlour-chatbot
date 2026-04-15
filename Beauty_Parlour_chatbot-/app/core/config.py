@@ -86,6 +86,11 @@ class Settings(BaseSettings):
         ge=1,
         validation_alias=AliasChoices("NOTIFICATION_POLL_SECONDS"),
     )
+    lifecycle_poll_seconds: int = Field(
+        default=600,
+        ge=60,
+        validation_alias=AliasChoices("LIFECYCLE_POLL_SECONDS"),
+    )
     
     # CORS Configuration (comma-separated origins)
     cors_origins: str = Field(

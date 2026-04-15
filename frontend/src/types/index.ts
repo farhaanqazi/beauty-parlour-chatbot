@@ -20,6 +20,7 @@ export interface AuthState {
 export type AppointmentStatus =
   | 'pending'
   | 'confirmed'
+  | 'in_progress'
   | 'cancelled_by_client'
   | 'cancelled_by_user'
   | 'cancelled_by_salon'

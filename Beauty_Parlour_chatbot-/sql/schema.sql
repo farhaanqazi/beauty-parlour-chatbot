@@ -24,6 +24,7 @@ BEGIN
     CREATE TYPE appointment_status AS ENUM (
         'pending',
         'confirmed',
+        'in_progress',
         'cancelled_by_client',
         'cancelled_by_user',
         'cancelled_by_salon',
@@ -75,6 +76,7 @@ ALTER TYPE channel_type ADD VALUE IF NOT EXISTS 'telegram';
 
 ALTER TYPE appointment_status ADD VALUE IF NOT EXISTS 'pending';
 ALTER TYPE appointment_status ADD VALUE IF NOT EXISTS 'confirmed';
+ALTER TYPE appointment_status ADD VALUE IF NOT EXISTS 'in_progress';
 ALTER TYPE appointment_status ADD VALUE IF NOT EXISTS 'cancelled_by_client';
 ALTER TYPE appointment_status ADD VALUE IF NOT EXISTS 'cancelled_by_user';
 ALTER TYPE appointment_status ADD VALUE IF NOT EXISTS 'cancelled_by_salon';

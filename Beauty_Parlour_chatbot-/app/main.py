@@ -4,13 +4,15 @@ import logging
 import os
 import sys
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Dict, Any
 
 import httpx
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from starlette import status
@@ -302,3 +304,21 @@ if settings.environment != "production":
         else:
             masked = "***"
         return {"db_url_masked": masked}
+
+
+# ============================================================================
+# SPA Fallback — serve the built React frontend for all non-API routes.
+# Only activated when `frontend/dist` exists (i.e. after `npm run build`).
+# In development the Vite dev server handles routing itself.
+# ============================================================================
+_frontend_dist = Path(__file__).resolve().parent.parent / "frontend" / "dist"
+if _frontend_dist.is_dir():
+    # Serve hashed asset bundles (JS, CSS, images) under /assets
+    _assets_dir = _frontend_dist / "assets"
+    if _assets_dir.is_dir():
+        app.mount("/assets", StaticFiles(directory=str(_assets_dir)), name="spa-assets")
+
+    @app.get("/{full_path:path}", include_in_schema=False)
+    async def _spa_fallback(full_path: str) -> FileResponse:
+        """Return index.html for every path the SPA router owns."""
+        return FileResponse(str(_frontend_dist / "index.html"))

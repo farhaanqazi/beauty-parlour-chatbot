@@ -5,6 +5,7 @@ import { useUpdateAppointmentStatus } from '../../hooks/useAppointments';
 import type { AppointmentStatus } from '../../types';
 import { AlertCircle, Loader } from 'lucide-react';
 import { AnimatePresence } from 'motion/react';
+import { ALLOWED_TRANSITIONS, STATUS_LABELS } from '../../constants/appointmentTransitions';
 
 interface UpdateStatusDialogProps {
   open: boolean;
@@ -13,37 +14,12 @@ interface UpdateStatusDialogProps {
   onClose: () => void;
 }
 
-// Define valid status transitions
-const statusTransitions: Record<AppointmentStatus, AppointmentStatus[]> = {
-  pending: ['confirmed', 'no_show'],
-  confirmed: ['completed', 'no_show'],
-  cancelled_by_client: [],
-  cancelled_by_salon: [],
-  cancelled_by_reception: [],
-  cancelled_closure: [],
-  cancelled_by_user: [],
-  completed: [],
-  no_show: [],
-};
-
-const statusLabels: Record<AppointmentStatus, string> = {
-  pending: 'Pending',
-  confirmed: 'Confirmed',
-  completed: 'Completed',
-  cancelled_by_client: 'Cancelled by Client',
-  cancelled_by_salon: 'Cancelled by Salon',
-  cancelled_by_reception: 'Cancelled by Reception',
-  cancelled_closure: 'Cancelled Closure',
-  cancelled_by_user: 'Cancelled by User',
-  no_show: 'No Show',
-};
-
 const UpdateStatusDialog = ({ open, appointmentId, currentStatus, onClose }: UpdateStatusDialogProps) => {
   const [error, setError] = useState<string | null>(null);
   const [newStatus, setNewStatus] = useState<AppointmentStatus>(currentStatus);
   const updateMutation = useUpdateAppointmentStatus();
 
-  const allowedTransitions = statusTransitions[currentStatus] || [];
+  const allowedTransitions = ALLOWED_TRANSITIONS[currentStatus] ?? [];
 
   const handleSubmit = async () => {
     setError(null);
@@ -60,7 +36,7 @@ const UpdateStatusDialog = ({ open, appointmentId, currentStatus, onClose }: Upd
   // Prepare options for TailwindSelect
   const statusOptions = allowedTransitions.map((status) => ({
     value: status,
-    label: statusLabels[status],
+    label: STATUS_LABELS[status],
   }));
 
   const actions = (
@@ -116,7 +92,7 @@ const UpdateStatusDialog = ({ open, appointmentId, currentStatus, onClose }: Upd
             <AlertCircle className="w-4 h-4 text-blue-600 flex-shrink-0" />
             <span className="text-sm text-blue-700">
               Status cannot be changed from{' '}
-              <span className="font-semibold">{statusLabels[currentStatus]}</span>.
+              <span className="font-semibold">{STATUS_LABELS[currentStatus]}</span>.
             </span>
           </div>
         ) : (

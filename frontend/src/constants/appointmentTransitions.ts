@@ -2,7 +2,8 @@ import type { AppointmentStatus } from '../types';
 
 export const ALLOWED_TRANSITIONS: Partial<Record<AppointmentStatus, AppointmentStatus[]>> = {
   pending: ['confirmed', 'no_show'],
-  confirmed: ['completed', 'no_show'],
+  confirmed: ['in_progress', 'completed', 'no_show'],
+  in_progress: ['completed', 'no_show'],
 };
 
 export const TERMINAL_STATUSES: AppointmentStatus[] = [
@@ -17,6 +18,7 @@ export const TERMINAL_STATUSES: AppointmentStatus[] = [
 export const STATUS_LABELS: Record<AppointmentStatus, string> = {
   pending: 'Pending',
   confirmed: 'Confirmed',
+  in_progress: 'In Progress',
   cancelled_by_client: 'Cancelled by Client',
   cancelled_by_salon: 'Cancelled by Salon',
   cancelled_by_reception: 'Cancelled by Reception',

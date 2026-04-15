@@ -123,35 +123,44 @@ export const fetchStaffBySalon = async (salonId: string): Promise<StaffMember[]>
 };
 
 /**
- * Fetch all appointments for revenue calculation
- * Uses GET /salons/{salon_id} endpoint and filters completed appointments
+ * Fetch completed appointments for revenue calculation.
+ * Uses the salon-specific endpoint (accessible to all roles) and filters client-side.
  */
 export const fetchAppointmentsForRevenue = async (
   salonId: string,
   fromDate: string,
   toDate: string
 ): Promise<DashboardAppointment[]> => {
-  // Note: Backend doesn't have a dedicated revenue endpoint yet
-  // This uses the general appointments list and filters client-side
-  const { data } = await apiClient.get<{ data: any[] }>('/api/v1/appointments', {
-    params: {
-      salon_id: salonId,
-      date_from: fromDate,
-      date_to: toDate,
-      status: 'completed',
-    },
-  });
-  
-  // Transform to DashboardAppointment format
-  return data.data.map((apt: any) => ({
-    id: apt.id,
-    customer_name: apt.customer?.display_name || apt.customer?.phone_number || 'Unknown',
-    service_name: apt.service?.name || 'Unknown Service',
-    staff_name: null,
-    appointment_at: apt.appointment_at,
-    status: apt.status,
-    phone_number: apt.customer?.phone_number || null,
-  }));
+  const { data } = await apiClient.get<{ appointments: any[] }>(`/api/v1/salons/${salonId}/appointments/all`);
+
+  const from = new Date(fromDate);
+  const to = new Date(toDate);
+
+  // Count revenue from completed OR confirmed appointments (appointments are rarely
+  // explicitly marked 'completed' — confirmed past appointments represent real revenue too)
+  const revenueStatuses = new Set(['completed', 'confirmed']);
+
+  console.log('[Revenue] Total appointments from API:', data.appointments.length);
+  console.log('[Revenue] Date window:', fromDate, '→', toDate);
+  console.log('[Revenue] Sample (first 5):', data.appointments.slice(0, 5).map((a: any) => ({
+    date: a.appointment_at, status: a.status, price: a.final_price
+  })));
+
+  return data.appointments
+    .filter((apt: any) => {
+      const aptDate = new Date(apt.appointment_at);
+      return revenueStatuses.has(apt.status) && aptDate >= from && aptDate <= to;
+    })
+    .map((apt: any) => ({
+      id: apt.id,
+      customer_name: apt.customer_name || 'Unknown',
+      service_name: apt.service_name || 'Unknown Service',
+      staff_name: null,
+      appointment_at: apt.appointment_at,
+      status: apt.status,
+      phone_number: null,
+      final_price: apt.final_price || 0,
+    }));
 };
 
 export interface DashboardSalonService {

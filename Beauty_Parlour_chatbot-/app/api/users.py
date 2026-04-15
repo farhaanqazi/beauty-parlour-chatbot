@@ -25,22 +25,37 @@ router = APIRouter(tags=["users"])
 @shared_limiter.limit("200 per minute")
 async def list_users(
     request: Request,
-    salon_id: Optional[UUID] = None,
+    salon_id: Optional[str] = None,
     role: Optional[str] = None,
     is_active: Optional[bool] = None,
     db=Depends(get_db),
-    user: AuthenticatedUser = Depends(require_roles("admin")),
+    user: AuthenticatedUser = Depends(get_current_user),
 ) -> dict:
     """
     List users with optional filtering.
 
-    Admin access only.
+    Admins can see all users across salons.
+    Salon owners and reception can only see users within their own salon.
     """
+    # Non-admins are restricted to their own salon's users
+    if user.role != "admin":
+        if not user.salon_id:
+            raise HTTPException(status_code=403, detail="Insufficient permissions.")
+        salon_id = user.salon_id
+
+    # Parse salon_id string to UUID for the query
+    parsed_salon_id: Optional[UUID] = None
+    if salon_id:
+        try:
+            parsed_salon_id = UUID(salon_id)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid salon_id format.")
+
     statement = select(User).options(joinedload(User.salon))
 
     # Apply filters
-    if salon_id:
-        statement = statement.where(User.salon_id == salon_id)
+    if parsed_salon_id:
+        statement = statement.where(User.salon_id == parsed_salon_id)
     if role:
         # Accept role as string and compare against enum values
         try:

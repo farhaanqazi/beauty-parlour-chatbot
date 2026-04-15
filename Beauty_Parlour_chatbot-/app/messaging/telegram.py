@@ -39,22 +39,21 @@ class TelegramTransport(MessagingTransport):
         # Send text message (with optional inline keyboard buttons)
         if instruction.text:
             url = f"https://api.telegram.org/bot{token}/sendMessage"
-            payload: dict = {"chat_id": destination, "text": instruction.text}
+            # Telegram uses single-asterisk *text* for bold in Markdown mode
+            payload: dict = {
+                "chat_id": destination,
+                "text": instruction.text,
+                "parse_mode": "Markdown",
+            }
 
             # Add inline keyboard buttons if present
             if instruction.buttons:
                 app_logger.info(f"Telegram sending message with {len(instruction.buttons)} buttons: {[btn['label'] for btn in instruction.buttons]}")
-                # Telegram expects buttons in rows: [[btn1, btn2], [btn3, btn4]]
-                # We'll put max 3 buttons per row
-                keyboard = []
-                row = []
-                for btn in instruction.buttons:
-                    row.append({"text": btn["label"], "callback_data": btn["callback"]})
-                    if len(row) >= 3:
-                        keyboard.append(row)
-                        row = []
-                if row:
-                    keyboard.append(row)
+                # One button per row — full width, nothing gets clipped on mobile
+                keyboard = [
+                    [{"text": btn["label"], "callback_data": btn["callback"]}]
+                    for btn in instruction.buttons
+                ]
 
                 payload["reply_markup"] = {"inline_keyboard": keyboard}
                 app_logger.debug(f"Telegram button payload: {payload['reply_markup']}")

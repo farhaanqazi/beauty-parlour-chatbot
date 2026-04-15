@@ -11,70 +11,52 @@ export const useAuth = () => {
   // Compute isAuthenticated from user state
   const isAuthenticated = !!user;
 
-  // Initialize auth state from persisted store on mount
+  // Initialize auth state on mount.
+  // The Zustand persist store sets isLoading=false once localStorage is read,
+  // so this effect only needs to handle the truly-fresh (no persisted user) case.
   useEffect(() => {
     const initializeAuth = async () => {
-      // Skip auth initialization if Supabase is not configured
+      // If there's already a persisted user the store is ready — nothing to do.
+      // isLoading was already set to false by onRehydrateStorage.
+      const existingUser = useAuthStore.getState().user;
+      if (existingUser) return;
+
+      // No persisted user — check Supabase for an active session.
       if (!supabase) {
         setLoading(false);
         return;
       }
 
-      // If the store already has a user (e.g. from a just-completed login),
-      // don't re-initialize — it would race and clear the freshly-set state.
-      const existingUser = useAuthStore.getState().user;
-      if (existingUser) {
-        setLoading(false);
-        return;
-      }
-
-      // Timeout: if auth init takes >10s, force resolve to prevent infinite spinner
       const timeoutId = setTimeout(() => {
         console.error('[useAuth] Auth initialization timed out after 10s');
-        clearUser();
         setLoading(false);
       }, 10_000);
 
       try {
-        // Get existing session from Supabase
         const { data: { session }, error } = await supabase.auth.getSession();
 
-        if (error) {
-          console.error('Auth session error:', error);
+        if (error || !session) {
           clearTimeout(timeoutId);
           clearUser();
-          setLoading(false);
           return;
         }
 
-        if (session) {
-          // Fetch user profile
-          const { data: userData, error: userError } = await supabase
-            .from('users')
-            .select('*')
-            .eq('id', session.user.id)
-            .single();
+        const { data: userData, error: userError } = await supabase
+          .from('users')
+          .select('*')
+          .eq('id', session.user.id)
+          .single();
 
-          if (userError || !userData) {
-            console.error('User profile not found:', userError);
-            clearUser();
-          } else if (userData.is_active) {
-            setUser(userData as AuthUser, session.access_token);
-          } else {
-            console.warn('User account is inactive');
-            clearUser();
-          }
-        } else {
-          // No active session in Supabase, clear any persisted Zustand state
+        if (userError || !userData || !userData.is_active) {
           clearUser();
+        } else {
+          setUser(userData as AuthUser, session.access_token);
         }
-
-        clearTimeout(timeoutId);
-        setLoading(false);
       } catch (error) {
         console.error('Auth initialization error:', error);
-        clearTimeout(timeoutId);
         clearUser();
+      } finally {
+        clearTimeout(timeoutId);
         setLoading(false);
       }
     };

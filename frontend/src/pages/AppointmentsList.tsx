@@ -1,4 +1,5 @@
 import { useState, useMemo } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
   Calendar,
   Search,
@@ -18,6 +19,7 @@ interface Appointment {
   booking_reference: string;
   service: string;
   customer: string;
+  customer_id?: string;
   appointment_at: string;
   status: 'pending' | 'confirmed' | 'completed' | 'cancelled';
   final_price?: number;
@@ -30,6 +32,7 @@ interface FilterState {
 }
 
 export default function AppointmentsList() {
+  const navigate = useNavigate();
   const { isLoading: authLoading } = useAuth();
   const { isLoading: statsLoading } = useDashboardStats();
   const { data: appointments = [], isLoading: appointmentsLoading } = useTodayAppointments() as any;
@@ -308,7 +311,11 @@ export default function AppointmentsList() {
                       </td>
                       <td className="px-6 py-4 text-center">
                         <div className="flex justify-center gap-2">
-                          <button className="px-3 py-1 bg-blue-100 text-blue-700 rounded-lg hover:bg-blue-200 text-xs font-medium transition">
+                          <button
+                            onClick={() => apt.customer_id && navigate(`/customers/${apt.customer_id}`)}
+                            disabled={!apt.customer_id}
+                            className="px-3 py-1 bg-blue-100 text-blue-700 rounded-lg hover:bg-blue-200 text-xs font-medium transition disabled:opacity-40 disabled:cursor-not-allowed"
+                          >
                             View
                           </button>
                           {apt.status === 'pending' && (

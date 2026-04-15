@@ -111,8 +111,8 @@ class ConversationEngine:
                     OutboundInstruction(
                         text=f"{greeting_text}\n\nWhat would you like to do?",
                         buttons=[
-                            {"label": "📅 Book New Appointment", "callback": "action_book_new"},
-                            {"label": "🔍 Manage Existing Appointment", "callback": "action_manage_existing"},
+                            {"label": "📅 Book", "callback": "action_book_new"},
+                            {"label": "🔍 My Bookings", "callback": "action_manage_existing"},
                             {"label": "🔄 Start Over", "callback": "restart_flow"},
                         ],
                     ),
@@ -157,11 +157,104 @@ class ConversationEngine:
                         OutboundInstruction(
                             text="Please choose an option:",
                             buttons=[
-                                {"label": "📅 Book New Appointment", "callback": "action_book_new"},
-                                {"label": "🔍 Manage Existing Appointment", "callback": "action_manage_existing"},
+                                {"label": "📅 Book", "callback": "action_book_new"},
+                                {"label": "🔍 My Bookings", "callback": "action_manage_existing"},
                             ],
                         ),
                     ],
+                ), state_was_reset
+
+        if state.step == ConversationStep.SELECT_APPOINTMENT:
+            # Handle appointment selection when user has multiple appointments
+            # User types a number (1, 2, 3, etc.) to select - no buttons needed
+            
+            # Try to parse as number
+            try:
+                selected_number = int(cleaned_text)
+                
+                # Get appointment IDs from state metadata
+                appointment_ids = state.metadata.get("appointment_ids", []) if hasattr(state, 'metadata') and state.metadata else []
+                
+                if not appointment_ids:
+                    return FlowResult(
+                        state=state,
+                        messages=[OutboundInstruction(text="Appointment list not found. Please start over.")],
+                        clear_state=True,
+                    ), state_was_reset
+                
+                # Validate the number is within range
+                if selected_number < 1 or selected_number > len(appointment_ids):
+                    return FlowResult(
+                        state=state,
+                        messages=[OutboundInstruction(
+                            text=f"Please enter a number between 1 and {len(appointment_ids)}."
+                        )],
+                    ), state_was_reset
+                
+                # Get the selected appointment ID
+                selected_apt_id = appointment_ids[selected_number - 1]
+                
+                # Load the appointment details
+                from uuid import UUID
+                appointment = await self.appointment_service.get_appointment(UUID(selected_apt_id))
+                
+                if not appointment:
+                    return FlowResult(
+                        state=state,
+                        messages=[OutboundInstruction(text="Could not find that appointment. Please try again.")],
+                        clear_state=True,
+                    ), state_was_reset
+                
+                # Update state with selected appointment details
+                state.target_appointment_id = selected_apt_id
+                state.slots.service_id = str(appointment.service_id) if appointment.service_id else None
+                state.slots.service_name = appointment.service_name_snapshot
+                
+                # Convert to salon timezone for display
+                local_time = appointment.appointment_at.astimezone(ZoneInfo(salon.timezone))
+                state.slots.appointment_date = local_time.date()
+                state.slots.appointment_time = local_time.time()
+                
+                date_str = local_time.strftime("%A, %d %b %Y")
+                time_str = local_time.strftime("%I:%M %p")
+                
+                # Now show action menu for the selected appointment
+                self._advance_step(state, ConversationStep.MANAGE_APPOINTMENT_MENU)
+                
+                return FlowResult(
+                    state=state,
+                    messages=[
+                        OutboundInstruction(
+                            text=(
+                                f"Selected appointment:\n\n"
+                                f"📋 **{appointment.service_name_snapshot}**\n"
+                                f"Ref: {appointment.booking_reference}\n"
+                                f"📅 {date_str}\n"
+                                f"⏰ {time_str}\n\n"
+                                f"What would you like to do?"
+                            ),
+                            buttons=[
+                                {"label": "🔄 Reschedule", "callback": "action_reschedule"},
+                                {"label": "❌ Cancel", "callback": "action_cancel"},
+                                {"label": "✅ Keep", "callback": "action_keep"},
+                                {"label": "🔄 Start Over", "callback": "restart_flow"},
+                            ],
+                        )
+                    ],
+                ), state_was_reset
+                
+            except ValueError:
+                # Not a number, check for special commands
+                if cleaned_text in ["restart", "start over"]:
+                    return FlowResult(
+                        state=state,
+                        clear_state=True,
+                    ), state_was_reset
+                
+                # Invalid input
+                return FlowResult(
+                    state=state,
+                    messages=[OutboundInstruction(text="Please reply with a number (e.g., *1*, *2*, *3*) to select an appointment.")],
                 ), state_was_reset
 
         if state.step == ConversationStep.MANAGE_APPOINTMENT_MENU:
@@ -203,8 +296,8 @@ class ConversationEngine:
                         OutboundInstruction(
                             text="Are you sure you want to cancel this appointment?",
                             buttons=[
-                                {"label": "✅ YES, Cancel", "callback": "confirm_yes"},
-                                {"label": "❌ NO, Keep it", "callback": "confirm_no"},
+                                {"label": "✅ Cancel", "callback": "confirm_yes"},
+                                {"label": "❌ Keep", "callback": "confirm_no"},
                                 {"label": "🔄 Start Over", "callback": "restart_flow"},
                             ],
                         )
@@ -228,7 +321,7 @@ class ConversationEngine:
                             buttons=[
                                 {"label": "🔄 Reschedule", "callback": "action_reschedule"},
                                 {"label": "❌ Cancel", "callback": "action_cancel"},
-                                {"label": "✅ Keep as is", "callback": "action_keep"},
+                                {"label": "✅ Keep", "callback": "action_keep"},
                                 {"label": "🔄 Start Over", "callback": "restart_flow"},
                             ],
                         )
@@ -381,8 +474,8 @@ class ConversationEngine:
                 if time_like_check:
                     # User typed a time when we're asking for a date
                     result, _ = self._invalid_reply(state, (
-                        f"That looks like a time (**{cleaned_text}**), but I need a **date** first.\n\n"
-                        "Please pick a date (e.g. **tomorrow**, **next Friday**, **25 April**), then I'll ask for the time."
+                        f"That looks like a time (*{cleaned_text}*), but I need a *date* first.\n\n"
+                        "Please pick a date (e.g. *tomorrow*, *next Friday*, *25 April*), then I'll ask for the time."
                     ))
                     result.messages[0].buttons = [
                         {"label": "🔄 Start Over", "callback": "restart_flow"}
@@ -395,16 +488,16 @@ class ConversationEngine:
                     error_msg = (
                         f"I couldn't understand '{cleaned_text}'.\n\n"
                         "Try typing:\n"
-                        "• **25 April** or **next Friday**\n"
-                        "• **25/04/2026** or **tomorrow**\n"
+                        "• *25 April* or *next Friday*\n"
+                        "• *25/04/2026* or *tomorrow*\n"
                         "• Or tap a button above 👆"
                     )
                 elif state.attempt_count == 1:
                     error_msg = (
                         f"Still having trouble? Try a simpler format:\n"
-                        "• **tomorrow**\n"
-                        "• **next Monday**\n"
-                        "• **25/04** (day/month)\n"
+                        "• *tomorrow*\n"
+                        "• *next Monday*\n"
+                        "• *25/04* (day/month)\n"
                         "• Or tap a button above 👆"
                     )
                 else:
@@ -413,7 +506,7 @@ class ConversationEngine:
                         f"I'm not sure about '{cleaned_text}'.\n\n"
                         "You can:\n"
                         "• Tap a date button above 👆\n"
-                        "• Type **tomorrow** or **next Friday**\n"
+                        "• Type *tomorrow* or *next Friday*\n"
                         "• Tap '🔄 Start Over' to restart"
                     )
                 
@@ -460,10 +553,10 @@ class ConversationEngine:
                 state=state,
                 messages=[
                     OutboundInstruction(
-                        text=f"📅 You selected: **{formatted_date}**\n\nIs this date correct?",
+                        text=f"📅 You selected: *{formatted_date}*\n\nIs this date correct?",
                         buttons=[
-                            {"label": "✅ Yes, Confirm", "callback": "date_confirm_yes"},
-                            {"label": "❌ No, Change Date", "callback": "date_confirm_no"},
+                            {"label": "✅ Confirm", "callback": "date_confirm_yes"},
+                            {"label": "❌ Change Date", "callback": "date_confirm_no"},
                         ],
                     )
                 ],
@@ -552,10 +645,10 @@ class ConversationEngine:
                         state=state,
                         messages=[
                             OutboundInstruction(
-                                text=f"📅 You selected: **{formatted_date}**\n\nIs this date correct?",
+                                text=f"📅 You selected: *{formatted_date}*\n\nIs this date correct?",
                                 buttons=[
-                                    {"label": "✅ Yes, Confirm", "callback": "date_confirm_yes"},
-                                    {"label": "❌ No, Change Date", "callback": "date_confirm_no"},
+                                    {"label": "✅ Confirm", "callback": "date_confirm_yes"},
+                                    {"label": "❌ Change Date", "callback": "date_confirm_no"},
                                 ],
                             )
                         ],
@@ -582,10 +675,10 @@ class ConversationEngine:
                             state=state,
                             messages=[
                                 OutboundInstruction(
-                                    text="Please tap **Yes** to confirm or **No** to change the date.",
+                                    text="Please tap *Yes* to confirm or *No* to change the date.",
                                     buttons=[
-                                        {"label": "✅ Yes, Confirm", "callback": "date_confirm_yes"},
-                                        {"label": "❌ No, Change Date", "callback": "date_confirm_no"},
+                                        {"label": "✅ Confirm", "callback": "date_confirm_yes"},
+                                        {"label": "❌ Change Date", "callback": "date_confirm_no"},
                                     ],
                                 )
                             ],
@@ -702,8 +795,8 @@ class ConversationEngine:
                 if date_like_check:
                     # User typed a date when we're asking for a time
                     result, _ = self._invalid_reply(state, (
-                        f"That looks like a date (**{cleaned_text}**), but I need a **time**.\n\n"
-                        "Please pick a time (e.g. **5pm**, **17:30**, **5.30**)."
+                        f"That looks like a date (*{cleaned_text}*), but I need a *time*.\n\n"
+                        "Please pick a time (e.g. *5pm*, *17:30*, *5.30*)."
                     ))
                     result.messages[0].buttons = [
                         {"label": "🔄 Start Over", "callback": "restart_flow"}
@@ -716,16 +809,16 @@ class ConversationEngine:
                     error_msg = (
                         f"I couldn't understand '{cleaned_text}'.\n\n"
                         "Try typing:\n"
-                        "• **5:30 PM** or **17:30**\n"
-                        "• **5.30** or **5pm**\n"
+                        "• *5:30 PM* or *17:30*\n"
+                        "• *5.30* or *5pm*\n"
                         "• Or tap a button above 👆"
                     )
                 elif state.attempt_count == 1:
                     error_msg = (
                         f"Still having trouble? Try a simpler format:\n"
-                        "• **5pm**\n"
-                        "• **17:30**\n"
-                        "• **5.30**\n"
+                        "• *5pm*\n"
+                        "• *17:30*\n"
+                        "• *5.30*\n"
                         "• Or tap a button above 👆"
                     )
                 else:
@@ -734,7 +827,7 @@ class ConversationEngine:
                         f"I'm not sure about '{cleaned_text}'.\n\n"
                         "You can:\n"
                         "• Tap a time button above 👆\n"
-                        "• Type **5pm** or **17:30**\n"
+                        "• Type *5pm* or *17:30*\n"
                         "• Tap '🔄 Start Over' to restart"
                     )
                 
@@ -770,10 +863,10 @@ class ConversationEngine:
                 state=state,
                 messages=[
                     OutboundInstruction(
-                        text=f"⏰ You selected: **{formatted_time}**\n\nIs this time correct?",
+                        text=f"⏰ You selected: *{formatted_time}*\n\nIs this time correct?",
                         buttons=[
-                            {"label": "✅ Yes, Confirm", "callback": "time_confirm_yes"},
-                            {"label": "❌ No, Change Time", "callback": "time_confirm_no"},
+                            {"label": "✅ Confirm", "callback": "time_confirm_yes"},
+                            {"label": "❌ Change Time", "callback": "time_confirm_no"},
                         ],
                     )
                 ],
@@ -864,10 +957,10 @@ class ConversationEngine:
                         state=state,
                         messages=[
                             OutboundInstruction(
-                                text=f"⏰ You selected: **{formatted_time}**\n\nIs this time correct?",
+                                text=f"⏰ You selected: *{formatted_time}*\n\nIs this time correct?",
                                 buttons=[
-                                    {"label": "✅ Yes, Confirm", "callback": "time_confirm_yes"},
-                                    {"label": "❌ No, Change Time", "callback": "time_confirm_no"},
+                                    {"label": "✅ Confirm", "callback": "time_confirm_yes"},
+                                    {"label": "❌ Change Time", "callback": "time_confirm_no"},
                                 ],
                             )
                         ],
@@ -899,10 +992,10 @@ class ConversationEngine:
                             state=state,
                             messages=[
                                 OutboundInstruction(
-                                    text="Please tap **Yes** to confirm or **No** to change the time.",
+                                    text="Please tap *Yes* to confirm or *No* to change the time.",
                                     buttons=[
-                                        {"label": "✅ Yes, Confirm", "callback": "time_confirm_yes"},
-                                        {"label": "❌ No, Change Time", "callback": "time_confirm_no"},
+                                        {"label": "✅ Confirm", "callback": "time_confirm_yes"},
+                                        {"label": "❌ Change Time", "callback": "time_confirm_no"},
                                     ],
                                 )
                             ],
@@ -1068,10 +1161,12 @@ class ConversationEngine:
         return None
 
     async def _parse_date(self, message_text: str, timezone_name: str, language_hint: str | None) -> date | None:
-        """Parse date using dateparser library - handles natural language like 'first saturday of june'."""
+        """Parse date — tries dateparser first (fast), falls back to LLM for complex expressions."""
         today = datetime.now(ZoneInfo(timezone_name)).date()
         lang_code = self.LANG_ISO_MAP.get((language_hint or '').lower())
 
+        # === PASS 1: dateparser for simple formats ===
+        # Handles: "tomorrow", "next Monday", "25/04", "June 15", etc.
         parsed = dateparser.parse(
             message_text,
             settings={
@@ -1083,11 +1178,30 @@ class ConversationEngine:
             languages=[lang_code] if lang_code else None,
         )
 
-        if not parsed:
-            return None
+        if parsed:
+            result_date = parsed.date() if hasattr(parsed, 'date') else parsed
+            if result_date >= today:
+                return result_date
 
-        result_date = parsed.date() if hasattr(parsed, 'date') else parsed
-        return result_date if result_date >= today else None
+        # === PASS 2: LLM for complex natural language ===
+        # Handles: "3 mondays after 15 june", "3 days after 3rd saturday of june", etc.
+        # These are too complex for dateparser but LLMs handle them well.
+        reference_date = today
+        llm_result = await self.llm_service.parse_date(
+            message_text,
+            timezone_name,
+            reference_date,
+            language_hint,
+        )
+        if llm_result:
+            try:
+                llm_date = date.fromisoformat(llm_result)
+                if llm_date >= today:
+                    return llm_date
+            except (ValueError, TypeError):
+                pass
+
+        return None
 
     async def _parse_time(
         self,
@@ -1185,7 +1299,8 @@ class ConversationEngine:
             elif 13 <= hour <= 23:
                 return time(hour, 0)
 
-        # Fallback: dateparser for natural language like "evening", "3 pm"
+        # === PASS 2: dateparser for natural language ===
+        # Handles: "evening", "afternoon", "lunch time", etc.
         # NOTE: relative expressions like "8 minutes after 7" are handled
         # by pre-checks above. dateparser only handles what's left.
         lang_code = self.LANG_ISO_MAP.get((language_hint or '').lower())
@@ -1205,6 +1320,25 @@ class ConversationEngine:
 
         if parsed:
             return parsed.time()
+
+        # === PASS 3: LLM for anything neither regex nor dateparser handled ===
+        # Handles: "quarter to six", "twenty past four", or any other natural phrasing.
+        llm_result = await self.llm_service.parse_time(
+            message_text,
+            timezone_name,
+            reference_date,
+            language_hint,
+        )
+        if llm_result:
+            try:
+                # LLM returns "HH:MM" in 24-hour format
+                parts = llm_result.split(":")
+                if len(parts) == 2:
+                    h, m = int(parts[0]), int(parts[1])
+                    if 0 <= h <= 23 and 0 <= m <= 59:
+                        return time(h, m)
+            except (ValueError, TypeError):
+                pass
 
         return None
 

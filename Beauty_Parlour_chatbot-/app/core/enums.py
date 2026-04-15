@@ -17,6 +17,7 @@ class UserRole(str, Enum):
 class AppointmentStatus(str, Enum):
     PENDING = "pending"
     CONFIRMED = "confirmed"
+    IN_PROGRESS = "in_progress"
     CANCELLED_BY_CLIENT = "cancelled_by_client"
     # NOTE: ensure "cancelled_by_user" is added to appointment_status enum in migration SQL
     CANCELLED_BY_USER = "cancelled_by_user"
@@ -36,6 +37,7 @@ class ConversationStep(str, Enum):
     GREETING = "greeting"
     MAIN_MENU = "main_menu"
     MANAGE_APPOINTMENT_MENU = "manage_appointment_menu"
+    SELECT_APPOINTMENT = "select_appointment"  # New step for selecting which appointment to manage
     LANGUAGE = "language"
     CUSTOMER_NAME = "customer_name"
     MARRIAGE_TYPE = "marriage_type"

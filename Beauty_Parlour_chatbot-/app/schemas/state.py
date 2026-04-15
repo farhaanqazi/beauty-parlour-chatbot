@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime, time, timezone
+from typing import Any
 from uuid import uuid4
 
 from pydantic import BaseModel, Field
@@ -33,5 +34,6 @@ class ConversationState(BaseModel):
     slots: ConversationSlots = Field(default_factory=ConversationSlots)
     attempt_count: int = 0
     is_complete: bool = False
+    metadata: dict[str, Any] = Field(default_factory=dict)  # For temporary data like appointment lists
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))

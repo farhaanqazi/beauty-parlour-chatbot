@@ -105,9 +105,17 @@ export const useStaffList = () => {
 
   return useQuery({
     queryKey: ['dashboard', 'staff', salonId],
-    queryFn: () => salonId ? fetchStaffBySalon(salonId) : Promise.resolve([]),
+    queryFn: async () => {
+      if (!salonId) return [];
+      try {
+        return await fetchStaffBySalon(salonId);
+      } catch (err: any) {
+        console.error('[useStaffList] API error:', err?.response?.status, err?.response?.data ?? err?.message);
+        throw err;
+      }
+    },
     staleTime: 60000,
-    retry: 2,
+    retry: 1,
     enabled: !!salonId && !!token,
   });
 };
@@ -171,6 +179,8 @@ export const useWeeklyRevenue = () => {
         today.toISOString()
       );
 
+      console.log('[Revenue] After filter:', appointments.length, 'appointments');
+
       // Group by day and calculate revenue
       const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
       const revenueByDay: Record<string, number> = {};
@@ -188,8 +198,8 @@ export const useWeeklyRevenue = () => {
         const date = new Date(apt.appointment_at);
         const dayKey = days[date.getDay()];
         
-        // Add service price to revenue
-        const price = apt.service?.price || 0;
+        // Add final price to revenue
+        const price = apt.final_price || 0;
         revenueByDay[dayKey] = (revenueByDay[dayKey] || 0) + price;
       });
 

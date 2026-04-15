@@ -20,7 +20,7 @@
 
 import { useState } from 'react';
 import { AnimatePresence } from 'motion/react';
-import { useNavigate } from 'react-router-dom';
+import { Navigate, useNavigate } from 'react-router-dom';
 import {
   Calendar,
   Users,
@@ -341,13 +341,20 @@ const DashboardRedesigned = () => {
   const [searchQuery, setSearchQuery] = useState('');
   const [isNewAptModalOpen, setIsNewAptModalOpen] = useState(false);
   const [activeFilter, setActiveFilter] = useState<string>('today'); // Default to 'today'
-  const { user, logout } = useAuth();
+  const { user, isLoading: authLoading, logout } = useAuth();
   const navigate = useNavigate();
+
+  // Guard: admin must choose a salon before reaching this page.
+  // Non-admins use their own salon_id so no selection is needed.
+  const selectedSalonId = localStorage.getItem('selectedSalonId');
+  if (!authLoading && user?.role === 'admin' && !selectedSalonId) {
+    return <Navigate to="/salon-select" replace />;
+  }
 
   // Fetch real data from Supabase via backend
   const { isLoading: statsLoading, error: statsError, refetch: refetchStats } = useDashboardStats();
   const { data: allAppointments, isLoading: allLoading } = useAllAppointments();
-  const { data: staff, isLoading: staffLoading } = useStaffList();
+  const { data: staff, isLoading: staffLoading, error: staffError } = useStaffList();
 
   // Filter appointments based on search AND active filter
   const filteredAppointments = allAppointments?.filter((apt: any) => {
@@ -627,6 +634,10 @@ const DashboardRedesigned = () => {
                       </div>
                     ))}
                   </div>
+                ) : staffError ? (
+                  <p className="text-sm text-rose-400 text-center py-4">
+                    Failed to load staff ({(staffError as any)?.response?.status ?? 'network error'})
+                  </p>
                 ) : staff && staff.length > 0 ? (
                   staff.map((member) => (
                     <StaffCard key={member.id} staff={member} />

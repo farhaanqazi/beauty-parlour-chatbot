@@ -134,7 +134,12 @@ def setup_logging() -> None:
 
     request_id_filter = RequestIDFilter()
 
-    # Console handler
+    # Console handler — force utf-8 so emoji/non-ASCII chars don't crash on Windows (cp1252)
+    if hasattr(sys.stdout, "reconfigure"):
+        try:
+            sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
     console_handler = logging.StreamHandler(sys.stdout)
     console_handler.setLevel(log_level)
     console_handler.setFormatter(console_formatter)

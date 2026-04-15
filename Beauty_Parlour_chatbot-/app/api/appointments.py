@@ -270,10 +270,13 @@ async def list_all_salon_appointments(
                 "id": str(appointment.id),
                 "booking_reference": appointment.booking_reference,
                 "service_name": appointment.service_name_snapshot,
+                "customer_id": str(appointment.customer_id) if appointment.customer_id else None,
                 "customer_name": appointment.customer.display_name if appointment.customer else "Unknown",
                 "appointment_at": appointment.appointment_at.isoformat(),
                 "status": appointment.status.value,
-                "final_price": float(appointment.final_price) if appointment.final_price else 0,
+                "final_price": float(appointment.final_price) if appointment.final_price else (
+                    float(appointment.service.price) if appointment.service and appointment.service.price else 0
+                ),
             }
             for appointment in appointments
         ],
@@ -318,6 +321,7 @@ async def list_upcoming_appointments(
                 "id": str(appointment.id),
                 "booking_reference": appointment.booking_reference,
                 "service": appointment.service_name_snapshot,
+                "customer_id": str(appointment.customer_id) if appointment.customer_id else None,
                 "customer": appointment.customer.display_name if appointment.customer else None,
                 "appointment_at": appointment.appointment_at.isoformat(),
                 "status": appointment.status.value,

@@ -29,9 +29,13 @@ class TelegramTransport(MessagingTransport):
         Handles errors gracefully - logs failures and returns partial results
         instead of crashing the entire webhook handler.
         """
-        token = channel_config.provider_config.get("bot_token") or self.settings.telegram_bot_token
+        token = (channel_config.provider_config or {}).get("bot_token")
         if not token:
-            app_logger.warning("Telegram bot token not configured")
+            app_logger.error(
+                "Telegram bot token not configured for salon channel",
+                event="telegram_send_error",
+                channel_id=str(channel_config.id),
+            )
             return []
 
         deliveries: List[DeliveryResult] = []

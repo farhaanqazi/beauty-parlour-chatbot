@@ -11,31 +11,22 @@ import {
   Loader,
   AlertCircle,
 } from 'lucide-react';
-import { useDashboardStats, useTodayAppointments } from '../hooks/useDashboardData';
-import { useAuth } from '../hooks/useAuth';
-
-interface Appointment {
-  id: string;
-  booking_reference: string;
-  service: string;
-  customer: string;
-  customer_id?: string;
-  appointment_at: string;
-  status: 'pending' | 'confirmed' | 'completed' | 'cancelled';
-  final_price?: number;
-}
+import { useAppointments } from '../hooks/useAppointments';
+import { useDebounce } from '../hooks/useDebounce';
+import { useAuthStore } from '../store/authStore';
+import AppointmentDrawer from '../components/appointments/AppointmentDrawer';
+import type { Appointment, AppointmentStatus } from '../types/index';
 
 interface FilterState {
   searchTerm: string;
-  status: string | null;
+  status: AppointmentStatus | null;
   dateRange: 'today' | '7days' | '30days' | 'all';
 }
 
 export default function AppointmentsList() {
   const navigate = useNavigate();
-  const { isLoading: authLoading } = useAuth();
-  const { isLoading: statsLoading } = useDashboardStats();
-  const { data: appointments = [], isLoading: appointmentsLoading } = useTodayAppointments() as any;
+  const { user } = useAuthStore();
+  const salonId = localStorage.getItem('selectedSalonId') || user?.salon_id;
   
   const [filters, setFilters] = useState<FilterState>({
     searchTerm: '',
@@ -44,51 +35,43 @@ export default function AppointmentsList() {
   });
   const [showFilters, setShowFilters] = useState(false);
   const [sortBy, setSortBy] = useState<'date' | 'customer' | 'status'>('date');
+  const [selectedAppointment, setSelectedAppointment] = useState<Appointment | null>(null);
 
-  // Filter and sort appointments
-  const filteredAppointments = useMemo(() => {
-    let result = appointments;
+  // Debounce search to avoid spamming the DB
+  const debouncedSearch = useDebounce(filters.searchTerm, 500);
 
-    // Search filter
-    if (filters.searchTerm) {
-      const term = filters.searchTerm.toLowerCase();
-      result = result.filter(
-        (apt: Appointment) =>
-          apt.customer?.toLowerCase().includes(term) ||
-          apt.service?.toLowerCase().includes(term) ||
-          apt.booking_reference?.toLowerCase().includes(term)
-      );
+  // Map UI range to ISO date boundaries for the API
+  const dateParams = useMemo(() => {
+    const now = new Date();
+    const startOfToday = new Date(now.setHours(0, 0, 0, 0)).toISOString();
+    
+    if (filters.dateRange === 'today') {
+      const endOfToday = new Date(now.setHours(23, 59, 59, 999)).toISOString();
+      return { from: startOfToday, to: endOfToday };
     }
-
-    // Status filter
-    if (filters.status) {
-      result = result.filter((apt: Appointment) => apt.status === filters.status);
+    if (filters.dateRange === '7days') {
+      const next7Days = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000).toISOString();
+      return { from: startOfToday, to: next7Days };
     }
-
-    // Sort
-    if (sortBy === 'customer') {
-      result.sort((a: Appointment, b: Appointment) => (a.customer || '').localeCompare(b.customer || ''));
-    } else if (sortBy === 'status') {
-      result.sort((a: Appointment, b: Appointment) => a.status.localeCompare(b.status));
-    } else {
-      result.sort(
-        (a: Appointment, b: Appointment) =>
-          new Date(a.appointment_at).getTime() - new Date(b.appointment_at).getTime()
-      );
+    if (filters.dateRange === '30days') {
+      const next30Days = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000).toISOString();
+      return { from: startOfToday, to: next30Days };
     }
+    return { from: undefined, to: undefined };
+  }, [filters.dateRange]);
 
-    return result;
-  }, [appointments, filters, sortBy]);
+  // Reactive DB Query - Use isFetching to track sub-queries
+  const { data: appointmentData, isLoading, isFetching, error, refetch } = useAppointments({
+    salon_id: salonId || undefined,
+    status: (filters.status as any) || undefined,
+    date_from: dateParams.from,
+    date_to: dateParams.to,
+    search: debouncedSearch || undefined,
+    page: 1,
+    page_size: 100
+  });
 
-  const getStatusBadge = (status: string) => {
-    const styles = {
-      confirmed: 'bg-green-100 text-green-800 border border-green-300',
-      pending: 'bg-amber-100 text-amber-800 border border-amber-300',
-      completed: 'bg-blue-100 text-blue-800 border border-blue-300',
-      cancelled: 'bg-red-100 text-red-800 border border-red-300',
-    };
-    return styles[status as keyof typeof styles] || 'bg-gray-100 text-gray-800';
-  };
+  const appointments = appointmentData?.data || [];
 
   const getStatusIcon = (status: string) => {
     switch (status) {
@@ -97,6 +80,8 @@ export default function AppointmentsList() {
       case 'pending':
         return <Clock className="w-4 h-4" />;
       case 'cancelled':
+      case 'cancelled_by_salon':
+      case 'cancelled_closure':
         return <X className="w-4 h-4" />;
       default:
         return null;
@@ -113,47 +98,64 @@ export default function AppointmentsList() {
     });
   };
 
-  const isLoading = authLoading || statsLoading || appointmentsLoading;
+  // Show loading state if it's the first load OR if we're refetching (e.g. searching)
+  const isPending = isLoading || isFetching;
 
-  if (isLoading) {
+  if (isPending && appointments.length === 0) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-blue-50 to-amber-50 p-6">
-        <div className="max-w-7xl mx-auto">
-          <div className="flex items-center justify-center h-64">
-            <Loader className="w-8 h-8 text-blue-600 animate-spin" />
+      <div className="min-h-screen bg-[var(--color-surface-base)] flex flex-col items-center justify-center">
+        <div className="w-12 h-12 border-4 border-[var(--color-accent)] border-t-transparent rounded-full animate-spin mb-4" />
+        <p className="text-[var(--color-neutral-400)] font-bold animate-pulse">Querying Database...</p>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="min-h-screen bg-[var(--color-surface-base)] flex items-center justify-center p-6">
+        <div className="bg-[var(--color-surface-raised)] rounded-2xl border border-[var(--color-neutral-800)] p-12 text-center max-w-md w-full">
+          <div className="w-20 h-20 bg-rose-500/10 rounded-full flex items-center justify-center mx-auto mb-6">
+            <AlertCircle className="w-10 h-10 text-rose-500" />
           </div>
+          <h2 className="text-2xl font-bold text-[var(--color-neutral-100)] mb-2">DB Connection Failed</h2>
+          <p className="text-[var(--color-neutral-400)] mb-8">We couldn't reach the database to fetch appointments.</p>
+          <button
+            onClick={() => refetch()}
+            className="w-full py-4 bg-[var(--color-accent)] text-[var(--color-surface-base)] font-black rounded-xl hover:bg-[var(--color-accent-hover)] transition-all"
+          >
+            Retry Fetch
+          </button>
         </div>
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-blue-50 to-amber-50">
-      {/* Header */}
-      <div className="border-b border-neutral-200 bg-white shadow-sm">
-        <div className="max-w-7xl mx-auto px-6 py-6">
-          <div className="flex items-center gap-3 mb-2">
-            <Calendar className="w-8 h-8 text-blue-600" />
-            <h1 className="text-3xl font-bold text-neutral-900">Appointments</h1>
+    <div className="min-h-screen bg-[var(--color-surface-base)]">
+      <main className="max-w-7xl mx-auto px-6 py-8">
+        {/* Page Hero Section */}
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-8">
+          <div className="flex items-center gap-4">
+            <div className="w-12 h-12 bg-[var(--color-accent)]/10 rounded-2xl flex items-center justify-center shadow-lg shadow-[var(--color-accent)]/5 border border-[var(--color-accent)]/20">
+              <Calendar className="w-7 h-7 text-[var(--color-accent)]" />
+            </div>
+            <div>
+              <h1 className="text-3xl font-bold text-[var(--color-neutral-100)]">Appointments</h1>
+              <p className="text-sm text-[var(--color-neutral-400)]">Manage and oversee all salon bookings</p>
+            </div>
           </div>
-          <p className="text-neutral-600">
-            Manage all salon appointments and bookings
-          </p>
         </div>
-      </div>
 
-      {/* Main Content */}
-      <div className="max-w-7xl mx-auto px-6 py-8">
-        {/* Search and Filters */}
-        <div className="bg-white rounded-2xl shadow-sm border border-neutral-200 p-4 mb-6">
-          <div className="flex flex-col gap-4">
+        {/* Search and Filters Container */}
+        <div className="bg-[var(--color-surface-raised)] rounded-2xl shadow-xl shadow-black/20 border border-[var(--color-neutral-800)] p-5 mb-6">
+          <div className="flex flex-col gap-5">
             {/* Search Bar */}
             <div className="relative">
-              <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-5 h-5 text-neutral-400" />
+              <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-[var(--color-neutral-500)]" />
               <input
                 type="text"
                 placeholder="Search by customer name, service, or booking reference..."
-                className="w-full pl-10 pr-4 py-3 border border-neutral-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                className="w-full pl-12 pr-4 py-3.5 bg-[var(--color-surface-base)] border border-[var(--color-neutral-800)] rounded-xl text-[var(--color-neutral-100)] text-sm focus:outline-none focus:ring-2 focus:ring-[var(--color-accent)]/50 transition-all placeholder:text-[var(--color-neutral-500)]"
                 value={filters.searchTerm}
                 onChange={(e) =>
                   setFilters(prev => ({ ...prev, searchTerm: e.target.value }))
@@ -161,19 +163,25 @@ export default function AppointmentsList() {
               />
             </div>
 
-            {/* Filter Buttons */}
-            <div className="flex flex-wrap gap-2">
+            {/* Filter Controls Row */}
+            <div className="flex flex-wrap items-center gap-3">
               <button
                 onClick={() => setShowFilters(!showFilters)}
-                className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition"
+                className={`min-h-[48px] flex items-center gap-2 px-5 py-2.5 rounded-xl font-bold transition-all ${
+                  showFilters 
+                    ? 'bg-[var(--color-accent)] text-[var(--color-surface-base)]' 
+                    : 'bg-[var(--color-surface-overlay)] text-[var(--color-neutral-100)] border border-[var(--color-neutral-700)] hover:bg-[var(--color-surface-floating)]'
+                }`}
               >
                 <Filter className="w-4 h-4" />
                 Filters
-                <ChevronDown className={`w-4 h-4 transition ${showFilters ? 'rotate-180' : ''}`} />
+                <ChevronDown className={`w-4 h-4 transition-transform ${showFilters ? 'rotate-180' : ''}`} />
               </button>
 
-              {/* Status Quick Filter */}
-              <div className="flex gap-2">
+              <div className="h-8 w-px bg-[var(--color-neutral-800)] mx-2 hidden sm:block" />
+
+              {/* Status Quick Filter Pills */}
+              <div className="flex gap-2 flex-wrap">
                 {['pending', 'confirmed', 'completed', 'cancelled'].map(status => (
                   <button
                     key={status}
@@ -183,147 +191,143 @@ export default function AppointmentsList() {
                         status: prev.status === status ? null : status,
                       }))
                     }
-                    className={`px-3 py-2 rounded-lg text-sm font-medium transition ${
+                    className={`min-h-[48px] px-4 py-2 rounded-xl text-sm font-bold capitalize transition-all ${
                       filters.status === status
-                        ? 'bg-blue-600 text-white'
-                        : 'bg-neutral-100 text-neutral-700 hover:bg-neutral-200'
+                        ? 'bg-[var(--color-accent)]/10 text-[var(--color-accent)] border border-[var(--color-accent)]/30'
+                        : 'text-[var(--color-neutral-400)] hover:text-[var(--color-neutral-100)] hover:bg-[var(--color-surface-overlay)]'
                     }`}
                   >
-                    {status.charAt(0).toUpperCase() + status.slice(1)}
+                    {status}
                   </button>
                 ))}
               </div>
             </div>
 
-            {/* Advanced Filters */}
+            {/* Advanced Filters Drawer */}
             {showFilters && (
-              <div className="border-t border-neutral-200 pt-4">
-                <label className="block text-sm font-medium text-neutral-700 mb-2">
+              <div className="border-t border-[var(--color-neutral-800)] pt-5 animate-in fade-in slide-in-from-top-2">
+                <label className="block text-xs font-bold uppercase tracking-wider text-[var(--color-neutral-500)] mb-3">
                   Date Range
                 </label>
-                <div className="flex gap-2">
+                <div className="flex flex-wrap gap-2">
                   {['today', '7days', '30days', 'all'].map(range => (
                     <button
                       key={range}
                       onClick={() =>
                         setFilters(prev => ({ ...prev, dateRange: range as any }))
                       }
-                      className={`px-3 py-2 rounded-lg text-sm transition ${
+                      className={`min-h-[48px] px-5 py-2 rounded-xl text-sm font-bold transition-all ${
                         filters.dateRange === range
-                          ? 'bg-amber-100 text-amber-900 border-2 border-amber-300'
-                          : 'bg-neutral-100 text-neutral-700 hover:bg-neutral-200'
+                          ? 'bg-[var(--color-accent)] text-[var(--color-surface-base)] shadow-lg shadow-[var(--color-accent)]/20'
+                          : 'bg-[var(--color-surface-base)] text-[var(--color-neutral-400)] hover:text-[var(--color-neutral-100)] border border-[var(--color-neutral-800)]'
                       }`}
                     >
                       {range === 'today' && 'Today'}
                       {range === '7days' && 'Next 7 Days'}
                       {range === '30days' && 'Next 30 Days'}
-                      {range === 'all' && 'All'}
+                      {range === 'all' && 'All Bookings'}
                     </button>
                   ))}
                 </div>
               </div>
             )}
 
-            {/* Sort */}
-            <div className="flex items-center gap-2 text-sm">
-              <span className="text-neutral-600">Sort by:</span>
-              <select
-                value={sortBy}
-                onChange={(e) => setSortBy(e.target.value as any)}
-                className="px-3 py-1 border border-neutral-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-              >
-                <option value="date">Date</option>
-                <option value="customer">Customer Name</option>
-                <option value="status">Status</option>
-              </select>
+            {/* Sort & Info Row */}
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pt-2">
+              <div className="flex items-center gap-3 text-sm text-[var(--color-neutral-400)]">
+                <span className="font-medium">Sort by:</span>
+                <select
+                  value={sortBy}
+                  onChange={(e) => setSortBy(e.target.value as any)}
+                  className="bg-[var(--color-surface-base)] border border-[var(--color-neutral-800)] text-[var(--color-neutral-100)] rounded-lg px-3 py-1.5 focus:outline-none focus:ring-1 focus:ring-[var(--color-accent)]"
+                >
+                  <option value="date">Date & Time</option>
+                  <option value="customer">Customer Name</option>
+                  <option value="status">Booking Status</option>
+                </select>
+              </div>
+
+              <div className="text-sm text-[var(--color-neutral-500)]">
+                Showing <span className="text-[var(--color-neutral-100)] font-bold">{appointments.length}</span> appointments
+              </div>
             </div>
           </div>
         </div>
 
-        {/* Results Info */}
-        <div className="mb-4 text-sm text-neutral-600">
-          Showing <span className="font-semibold">{filteredAppointments.length}</span> of{' '}
-          <span className="font-semibold">{appointments.length}</span> appointments
-        </div>
-
-        {/* Appointments Table */}
-        {filteredAppointments.length > 0 ? (
-          <div className="bg-white rounded-2xl shadow-sm border border-neutral-200 overflow-hidden">
+        {/* Appointments Table Container */}
+        {appointments.length > 0 ? (
+          <div className="bg-[var(--color-surface-raised)] rounded-2xl shadow-2xl shadow-black/40 border border-[var(--color-neutral-800)] overflow-hidden">
             <div className="overflow-x-auto">
-              <table className="w-full">
-                <thead className="bg-neutral-50 border-b border-neutral-200">
-                  <tr>
-                    <th className="px-6 py-4 text-left text-sm font-semibold text-neutral-900">
-                      Booking Reference
+              <table className="w-full min-w-[900px]">
+                <thead>
+                  <tr className="bg-[var(--color-surface-overlay)] border-b border-[var(--color-neutral-800)]">
+                    <th className="px-6 py-5 text-left text-xs font-bold text-[var(--color-neutral-400)] uppercase tracking-wider">
+                      Reference
                     </th>
-                    <th className="px-6 py-4 text-left text-sm font-semibold text-neutral-900">
+                    <th className="px-6 py-5 text-left text-xs font-bold text-[var(--color-neutral-400)] uppercase tracking-wider">
                       Customer
                     </th>
-                    <th className="px-6 py-4 text-left text-sm font-semibold text-neutral-900">
+                    <th className="px-6 py-5 text-left text-xs font-bold text-[var(--color-neutral-400)] uppercase tracking-wider">
                       Service
                     </th>
-                    <th className="px-6 py-4 text-left text-sm font-semibold text-neutral-900">
-                      Date & Time
+                    <th className="px-6 py-5 text-left text-xs font-bold text-[var(--color-neutral-400)] uppercase tracking-wider">
+                      Schedule
                     </th>
-                    <th className="px-6 py-4 text-left text-sm font-semibold text-neutral-900">
+                    <th className="px-6 py-5 text-left text-xs font-bold text-[var(--color-neutral-400)] uppercase tracking-wider">
                       Price
                     </th>
-                    <th className="px-6 py-4 text-left text-sm font-semibold text-neutral-900">
+                    <th className="px-6 py-5 text-left text-xs font-bold text-[var(--color-neutral-400)] uppercase tracking-wider">
                       Status
                     </th>
-                    <th className="px-6 py-4 text-center text-sm font-semibold text-neutral-900">
-                      Actions
+                    <th className="px-6 py-5 text-center text-xs font-bold text-[var(--color-neutral-400)] uppercase tracking-wider">
+                      Action
                     </th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-neutral-200">
-                  {filteredAppointments.map((apt: Appointment, idx: number) => (
+                <tbody className="divide-y divide-[var(--color-neutral-800)]">
+                  {appointments.map((apt: Appointment, idx: number) => (
                     <tr
                       key={apt.id || idx}
-                      className="hover:bg-neutral-50 transition"
+                      className="group hover:bg-[var(--color-surface-overlay)] transition-all cursor-pointer"
+                      onClick={() => setSelectedAppointment(apt)}
                     >
-                      <td className="px-6 py-4 text-sm text-neutral-900 font-mono">
+                      <td className="px-6 py-5 text-sm font-mono text-[var(--color-accent)]">
                         {apt.booking_reference}
                       </td>
-                      <td className="px-6 py-4 text-sm text-neutral-900">
-                        {apt.customer || 'N/A'}
+                      <td className="px-6 py-5 text-sm font-bold text-[var(--color-neutral-100)]">
+                        {apt.customer || '—'}
                       </td>
-                      <td className="px-6 py-4 text-sm text-neutral-900">
-                        {apt.service || 'N/A'}
+                      <td className="px-6 py-5 text-sm text-[var(--color-neutral-300)]">
+                        {apt.service || '—'}
                       </td>
-                      <td className="px-6 py-4 text-sm text-neutral-900">
+                      <td className="px-6 py-5 text-sm text-[var(--color-neutral-400)] font-medium">
                         {formatTime(apt.appointment_at)}
                       </td>
-                      <td className="px-6 py-4 text-sm text-neutral-900 font-medium">
-                        {apt.final_price ? `₹${apt.final_price.toFixed(2)}` : '-'}
+                      <td className="px-6 py-5 text-sm text-[var(--color-neutral-100)] font-bold">
+                        {apt.final_price ? `₹${apt.final_price.toFixed(2)}` : '—'}
                       </td>
-                      <td className="px-6 py-4">
+                      <td className="px-6 py-5">
                         <div
-                          className={`inline-flex items-center gap-2 px-3 py-1 rounded-full ${getStatusBadge(
-                            apt.status
-                          )}`}
+                          className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border shadow-sm ${
+                            apt.status === 'confirmed' ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20' :
+                            apt.status === 'pending' ? 'bg-amber-500/10 text-amber-400 border-amber-500/20' :
+                            apt.status === 'completed' ? 'bg-blue-500/10 text-blue-400 border-blue-500/20' :
+                            'bg-rose-500/10 text-rose-400 border-rose-500/20'
+                          }`}
                         >
                           {getStatusIcon(apt.status)}
-                          <span className="text-xs font-semibold">
-                            {apt.status.charAt(0).toUpperCase() + apt.status.slice(1)}
+                          <span className="text-xs font-bold uppercase tracking-wider">
+                            {apt.status}
                           </span>
                         </div>
                       </td>
-                      <td className="px-6 py-4 text-center">
-                        <div className="flex justify-center gap-2">
-                          <button
-                            onClick={() => apt.customer_id && navigate(`/customers/${apt.customer_id}`)}
-                            disabled={!apt.customer_id}
-                            className="px-3 py-1 bg-blue-100 text-blue-700 rounded-lg hover:bg-blue-200 text-xs font-medium transition disabled:opacity-40 disabled:cursor-not-allowed"
-                          >
-                            View
-                          </button>
-                          {apt.status === 'pending' && (
-                            <button className="px-3 py-1 bg-amber-100 text-amber-700 rounded-lg hover:bg-amber-200 text-xs font-medium transition">
-                              Cancel
-                            </button>
-                          )}
-                        </div>
+                      <td className="px-6 py-5 text-center" onClick={(e) => e.stopPropagation()}>
+                        <button
+                          onClick={() => setSelectedAppointment(apt)}
+                          className="px-4 py-2 bg-[var(--color-surface-base)] text-[var(--color-neutral-300)] border border-[var(--color-neutral-800)] rounded-lg hover:border-[var(--color-accent)] hover:text-[var(--color-accent)] transition-all text-xs font-bold"
+                        >
+                          View
+                        </button>
                       </td>
                     </tr>
                   ))}
@@ -332,15 +336,20 @@ export default function AppointmentsList() {
             </div>
           </div>
         ) : (
-          <div className="bg-white rounded-2xl shadow-sm border border-neutral-200 p-12 text-center">
-            <AlertCircle className="w-12 h-12 text-neutral-400 mx-auto mb-4" />
-            <h3 className="text-lg font-semibold text-neutral-900 mb-1">No appointments found</h3>
-            <p className="text-neutral-600">
-              Try adjusting your search filters or date range
-            </p>
+          <div className="bg-[var(--color-surface-raised)] rounded-2xl border border-[var(--color-neutral-800)] p-20 text-center shadow-xl">
+            <div className="w-24 h-24 bg-[var(--color-surface-overlay)] rounded-3xl flex items-center justify-center mx-auto mb-8 rotate-3">
+              <AlertCircle className="w-12 h-12 text-[var(--color-neutral-500)]" />
+            </div>
+            <p className="text-[var(--color-neutral-100)] font-bold text-xl mb-2">No appointments found</p>
+            <p className="text-[var(--color-neutral-500)]">Try adjusting your search filters or date range</p>
           </div>
         )}
-      </div>
+      </main>
+
+      <AppointmentDrawer
+        appointment={selectedAppointment}
+        onClose={() => setSelectedAppointment(null)}
+      />
     </div>
   );
 }

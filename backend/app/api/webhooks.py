@@ -102,16 +102,24 @@ async def receive_whatsapp_webhook(
         message_count=len(payload.get("entry", [])),
     )
     try:
+        from sqlalchemy import select as sa_select
+        from app.db.models.salon import Salon as _Salon
+        _salon_result = await db.execute(sa_select(_Salon).where(_Salon.slug == salon_slug))
+        salon = _salon_result.scalar_one_or_none()
+        if not salon:
+            raise HTTPException(status_code=404, detail=f"Salon '{salon_slug}' not found.")
+
         normalized_messages = WebhookService.normalize_whatsapp_update(salon_slug, payload)
         results: list[ProcessResult] = []
         for message in normalized_messages:
-            # Idempotency: skip if this provider message was already processed
+            # Idempotency: skip if this provider message was already processed for this salon
             if message.provider_message_id:
                 exists_stmt = select(InboundMessage.id).where(
                     InboundMessage.provider_message_id == message.provider_message_id,
-                )
+                    InboundMessage.salon_id == salon.id,
+                ).limit(1)
                 exists_result = await db.execute(exists_stmt)
-                if exists_result.scalar_one_or_none():
+                if exists_result.first():
                     app_logger.info(
                         "Skipping duplicate WhatsApp message",
                         event="webhook_dedup",
@@ -147,15 +155,44 @@ async def receive_telegram_webhook(
     salon_slug: str,
     db=Depends(get_db),
     conversation_service: ConversationService = Depends(get_conversation_service),
-    settings: Settings = Depends(get_app_settings),
 ) -> dict:
-    # Verify Telegram webhook signature (secret token)
-    # Note: Telegram's secret_token only allows a-z, A-Z, 0-9, _, -
-    # We replace the colon in the bot token with an underscore to make it compatible
+    # Resolve per-salon bot token from DB — no global fallback
+    from sqlalchemy import select as sa_select
+    from app.db.models.salon import Salon, SalonChannel
+    from app.core.enums import ChannelType
+
+    salon_result = await db.execute(
+        sa_select(Salon).where(Salon.slug == salon_slug)
+    )
+    salon = salon_result.scalar_one_or_none()
+
+    if not salon:
+        raise HTTPException(status_code=404, detail=f"Salon '{salon_slug}' not found.")
+
+    ch_result = await db.execute(
+        sa_select(SalonChannel).where(
+            SalonChannel.salon_id == salon.id,
+            SalonChannel.channel == ChannelType.TELEGRAM,
+        )
+    )
+    channel = ch_result.scalar_one_or_none()
+    bot_token = (channel.provider_config or {}).get("bot_token") if channel else None
+
+    if not bot_token:
+        app_logger.error(
+            "Telegram bot token not configured for salon",
+            event="webhook_config_error",
+            channel="telegram",
+            salon_slug=salon_slug,
+        )
+        raise HTTPException(status_code=500, detail=f"Telegram channel not configured for salon '{salon_slug}'.")
+
+    # Verify Telegram webhook secret token
+    # secret_token was set as bot_token.replace(":", "_") during setWebhook
     secret_token = request.headers.get("X-Telegram-Bot-Api-Secret-Token", "")
-    expected_secret = settings.telegram_bot_token.replace(":", "_") if settings.telegram_bot_token else ""
-    
-    if expected_secret and secret_token != expected_secret:
+    expected_secret = bot_token.replace(":", "_")
+
+    if secret_token != expected_secret:
         app_logger.warn(
             "Telegram webhook secret mismatch",
             event="webhook_auth_failure",
@@ -183,13 +220,14 @@ async def receive_telegram_webhook(
         normalized_messages = WebhookService.normalize_telegram_update(salon_slug, payload)
         results: list[ProcessResult] = []
         for message in normalized_messages:
-            # Idempotency: skip if this provider message was already processed
+            # Idempotency: skip if this provider message was already processed for this salon
             if message.provider_message_id:
                 exists_stmt = select(InboundMessage.id).where(
                     InboundMessage.provider_message_id == message.provider_message_id,
-                )
+                    InboundMessage.salon_id == salon.id,
+                ).limit(1)
                 exists_result = await db.execute(exists_stmt)
-                if exists_result.scalar_one_or_none():
+                if exists_result.first():
                     app_logger.info(
                         "Skipping duplicate Telegram message",
                         event="webhook_dedup",

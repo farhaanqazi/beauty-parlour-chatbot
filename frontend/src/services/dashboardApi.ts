@@ -21,6 +21,15 @@ export interface DashboardStats {
   no_shows: number;
 }
 
+export interface Salon {
+  id: string;
+  name: string;
+  slug: string;
+  timezone: string;
+  is_active: boolean;
+  services_count: number;
+}
+
 export interface DashboardAppointment {
   id: string;
   customer_name: string;
@@ -30,6 +39,8 @@ export interface DashboardAppointment {
   status: string;
   phone_number: string | null;
   final_price?: number;
+  customer_id?: string | null;
+  booking_reference?: string | null;
   service?: {
     price: number;
   };
@@ -62,6 +73,19 @@ export const fetchDashboardStats = async (): Promise<DashboardStats> => {
 };
 
 /**
+ * Fetch all salons managed by the user
+ */
+export const fetchSalons = async (): Promise<Salon[]> => {
+  try {
+    const { data } = await apiClient.get('/api/v1/salons');
+    return data.data || [];
+  } catch (error: any) {
+    console.error('[fetchSalons] API error:', error);
+    throw error;
+  }
+};
+
+/**
  * Fetch upcoming appointments for a salon
  * MATCHES: @router.get("/salons/{salon_slug}/appointments/upcoming")
  */
@@ -76,15 +100,22 @@ export const fetchUpcomingAppointments = async (salonSlug: string, hours: number
   });
 
   // Backend returns: { salon: string, appointments: [...] }
+  // Backend field names: service, customer, customer_id, booking_reference
   return data.appointments.map((apt: any) => ({
     id: apt.id,
+    // Normalised names for DashboardAppointment type
     customer_name: apt.customer || 'Unknown',
     service_name: apt.service || 'Unknown Service',
+    // Also preserve original names so AppointmentsList / AppointmentDrawer can use them
+    customer: apt.customer || 'Unknown',
+    service: apt.service || 'Unknown Service',
     staff_name: null,
     appointment_at: apt.appointment_at,
     status: apt.status,
     phone_number: null,
     final_price: apt.final_price,
+    customer_id: apt.customer_id ?? null,
+    booking_reference: apt.booking_reference ?? null,
   }));
 };
 

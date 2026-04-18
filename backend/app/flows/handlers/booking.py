@@ -85,13 +85,20 @@ async def handle_booking(
 
         elif cleaned_text == "action_manage_existing":
             state.intent = UserIntent.MANAGE_BOOKING
-            engine._advance_step(state, ConversationStep.MANAGE_APPOINTMENT_MENU)
-            # Let conversation_service handle the lookup — we just signal the intent
-            # Return a special FlowResult that tells the caller to look up appointments
+            engine._advance_step(state, ConversationStep.LANGUAGE)
+            language_prompt = "Choose your language:"
+            lang_buttons = [
+                {"label": lang["label"], "callback": f"lang_{lang['id']}"}
+                for lang in flow_config["languages"]
+            ]
+            lang_buttons.append({"label": "\U0001f504 Start Over", "callback": "restart_flow"})
             return FlowResult(
                 state=state,
                 messages=[
-                    OutboundInstruction(text="__LOOKUP_APPOINTMENTS__"),
+                    OutboundInstruction(
+                        text=language_prompt,
+                        buttons=lang_buttons,
+                    ),
                 ],
             ), state_was_reset
 
@@ -125,8 +132,18 @@ async def handle_booking(
             lang_buttons.append({"label": "\U0001f504 Start Over", "callback": "restart_flow"})
             result, _ = engine._invalid_reply(state, "Please choose a valid language:", buttons=lang_buttons)
             return result, state_was_reset
-        # Acknowledge language choice, then move to NAME collection
+        # Acknowledge language choice, then move to next step based on intent
         state.slots.language = language["id"]
+        
+        if state.intent == UserIntent.MANAGE_BOOKING:
+            engine._advance_step(state, ConversationStep.MANAGE_APPOINTMENT_MENU)
+            return FlowResult(
+                state=state,
+                messages=[
+                    OutboundInstruction(text="__LOOKUP_APPOINTMENTS__"),
+                ],
+            ), state_was_reset
+            
         engine._advance_step(state, ConversationStep.CUSTOMER_NAME)
         return FlowResult(
             state=state,
@@ -226,7 +243,10 @@ async def handle_booking(
             state.previous_step = ConversationStep.CONFIRMATION
             return FlowResult(
                 state=state,
-                messages=[OutboundInstruction(text="No problem! Please provide your correct email address:")],
+                messages=[OutboundInstruction(
+                    text="No problem! Please provide your correct email address:",
+                    buttons=[{"label": "⏭️ Skip", "callback": "action_skip_email"}],
+                )],
             ), state_was_reset
         else:
             confirmation = await engine._resolve_yes_no(cleaned_text, state.slots.language)

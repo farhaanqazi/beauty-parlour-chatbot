@@ -1,8 +1,9 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { useRef, Suspense, lazy } from 'react';
+import { useState, Suspense, lazy } from 'react';
 import ProtectedRoute from './components/common/ProtectedRoute';
 import ErrorBoundary from './components/common/ErrorBoundary';
+import AppLayout from './components/common/AppLayout';
 import LoginRedesigned from './pages/LoginRedesigned';
 import DashboardRedesigned from './pages/DashboardRedesigned';
 import SalonSelection from './pages/SalonSelection';
@@ -12,11 +13,13 @@ const AppointmentsList = lazy(() => import('./pages/AppointmentsList'));
 const ServicesManagement = lazy(() => import('./pages/ServicesManagement'));
 const UserManagement = lazy(() => import('./pages/UserManagement'));
 const CustomerDetail = lazy(() => import('./pages/CustomerDetail'));
+const CustomersPage = lazy(() => import('./pages/CustomersPage'));
 const AdminDashboard = lazy(() => import('./pages/AdminDashboard'));
 const SalonOwnerDashboard = lazy(() => import('./pages/SalonOwnerDashboard'));
 const ReceptionDashboard = lazy(() => import('./pages/ReceptionDashboard'));
 const Analytics = lazy(() => import('./pages/Analytics'));
 const Reports = lazy(() => import('./pages/Reports'));
+const AddServicePage = lazy(() => import('./pages/AddServicePage'));
 
 // Shared loading fallback for lazy routes
 const PageLoader = () => (
@@ -39,14 +42,11 @@ const createQueryClient = () => new QueryClient({
 });
 
 const App = () => {
-  const queryClientRef = useRef<QueryClient | null>(null);
-  if (!queryClientRef.current) {
-    queryClientRef.current = createQueryClient();
-  }
+  const [queryClient] = useState(createQueryClient);
 
   return (
     <ErrorBoundary>
-      <QueryClientProvider client={queryClientRef.current}>
+      <QueryClientProvider client={queryClient}>
         <BrowserRouter>
           <Suspense fallback={<PageLoader />}>
             <Routes>
@@ -68,7 +68,7 @@ const App = () => {
                 path="/dashboard"
                 element={
                   <ProtectedRoute allowedRoles={['admin', 'salon_owner', 'reception']}>
-                    <DashboardRedesigned />
+                    <AppLayout><DashboardRedesigned /></AppLayout>
                   </ProtectedRoute>
                 }
               />
@@ -78,7 +78,7 @@ const App = () => {
                 path="/owner/appointments"
                 element={
                   <ProtectedRoute allowedRoles={['admin', 'salon_owner', 'reception']}>
-                    <AppointmentsList />
+                    <AppLayout><AppointmentsList /></AppLayout>
                   </ProtectedRoute>
                 }
               />
@@ -87,7 +87,16 @@ const App = () => {
                 path="/owner/services"
                 element={
                   <ProtectedRoute allowedRoles={['admin', 'salon_owner']}>
-                    <ServicesManagement />
+                    <AppLayout><ServicesManagement /></AppLayout>
+                  </ProtectedRoute>
+                }
+              />
+
+              <Route
+                path="/owner/services/new"
+                element={
+                  <ProtectedRoute allowedRoles={['admin', 'salon_owner']}>
+                    <AppLayout><AddServicePage /></AppLayout>
                   </ProtectedRoute>
                 }
               />
@@ -96,7 +105,7 @@ const App = () => {
                 path="/admin/users"
                 element={
                   <ProtectedRoute allowedRoles={['admin']}>
-                    <UserManagement />
+                    <AppLayout><UserManagement /></AppLayout>
                   </ProtectedRoute>
                 }
               />
@@ -106,7 +115,7 @@ const App = () => {
                 path="/admin/dashboard"
                 element={
                   <ProtectedRoute allowedRoles={['admin']}>
-                    <AdminDashboard />
+                    <AppLayout><AdminDashboard /></AppLayout>
                   </ProtectedRoute>
                 }
               />
@@ -115,7 +124,7 @@ const App = () => {
                 path="/owner/dashboard"
                 element={
                   <ProtectedRoute allowedRoles={['salon_owner']}>
-                    <SalonOwnerDashboard />
+                    <AppLayout><SalonOwnerDashboard /></AppLayout>
                   </ProtectedRoute>
                 }
               />
@@ -124,17 +133,26 @@ const App = () => {
                 path="/reception/dashboard"
                 element={
                   <ProtectedRoute allowedRoles={['reception']}>
-                    <ReceptionDashboard />
+                    <AppLayout><ReceptionDashboard /></AppLayout>
                   </ProtectedRoute>
                 }
               />
 
-              {/* TIER 3: Customer Details */}
+              {/* TIER 3: Customer List & Details */}
+              <Route
+                path="/customers"
+                element={
+                  <ProtectedRoute allowedRoles={['admin', 'salon_owner', 'reception']}>
+                    <AppLayout><CustomersPage /></AppLayout>
+                  </ProtectedRoute>
+                }
+              />
+
               <Route
                 path="/customers/:customerId"
                 element={
                   <ProtectedRoute allowedRoles={['admin', 'salon_owner', 'reception']}>
-                    <CustomerDetail />
+                    <AppLayout><CustomerDetail /></AppLayout>
                   </ProtectedRoute>
                 }
               />
@@ -144,7 +162,7 @@ const App = () => {
                 path="/analytics"
                 element={
                   <ProtectedRoute allowedRoles={['admin', 'salon_owner']}>
-                    <Analytics />
+                    <AppLayout><Analytics /></AppLayout>
                   </ProtectedRoute>
                 }
               />
@@ -153,7 +171,7 @@ const App = () => {
                 path="/reports"
                 element={
                   <ProtectedRoute allowedRoles={['admin', 'salon_owner']}>
-                    <Reports />
+                    <AppLayout><Reports /></AppLayout>
                   </ProtectedRoute>
                 }
               />

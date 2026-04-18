@@ -56,6 +56,7 @@ class NotificationJobType(str, Enum):
     REMINDER_24H = "reminder_24h"
     REMINDER_1H = "reminder_1h"
     REMINDER_15M = "reminder_15m"
+    REMINDER_7AM = "reminder_7am"          # Morning-of reminder at 07:00 salon local time
     SALON_DAILY_DIGEST = "salon_daily_digest"
     SALON_OPENING_DIGEST = "salon_opening_digest"
     SALON_PER_APPOINTMENT = "salon_per_appointment"

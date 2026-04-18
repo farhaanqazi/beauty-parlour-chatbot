@@ -311,7 +311,7 @@ if settings.environment != "production":
 # Only activated when `frontend/dist` exists (i.e. after `npm run build`).
 # In development the Vite dev server handles routing itself.
 # ============================================================================
-_frontend_dist = Path(__file__).resolve().parent.parent / "frontend" / "dist"
+_frontend_dist = Path(__file__).resolve().parents[2] / "frontend" / "dist"
 if _frontend_dist.is_dir():
     # Serve hashed asset bundles (JS, CSS, images) under /assets
     _assets_dir = _frontend_dist / "assets"
@@ -320,5 +320,8 @@ if _frontend_dist.is_dir():
 
     @app.get("/{full_path:path}", include_in_schema=False)
     async def _spa_fallback(full_path: str) -> FileResponse:
-        """Return index.html for every path the SPA router owns."""
+        """Serve built frontend assets directly and fall back to index.html for SPA routes."""
+        requested_path = (_frontend_dist / full_path).resolve()
+        if requested_path.is_file() and requested_path.is_relative_to(_frontend_dist):
+            return FileResponse(str(requested_path))
         return FileResponse(str(_frontend_dist / "index.html"))

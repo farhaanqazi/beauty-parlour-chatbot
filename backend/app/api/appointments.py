@@ -1,14 +1,14 @@
-from __future__ import annotations
 
-from datetime import datetime
+
+from datetime import datetime, timezone
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
 from slowapi import Limiter
 from slowapi.util import get_remote_address
-from sqlalchemy import select
-from sqlalchemy.orm import joinedload
+from sqlalchemy import select, or_
+from sqlalchemy.orm import joinedload, contains_eager
 
 from app.api.deps import get_db, get_notification_service, get_current_user, require_roles, AuthenticatedUser
 from app.core.enums import AppointmentStatus, NotificationJobType
@@ -38,14 +38,19 @@ class CreateAppointmentRequest(BaseModel):
     notes: str | None = None
 
 
+class UpdateStatusRequest(BaseModel):
+    status: str
+
+
 @router.get("/appointments")
 @shared_limiter.limit("200 per minute")
 async def list_appointments(
     request: Request,
     salon_id: str = Query(...),
-    date_from: datetime = Query(...),
-    date_to: datetime = Query(...),
+    date_from: datetime = Query(None),
+    date_to: datetime = Query(None),
     status: str = Query(None),
+    search: str = Query(None),
     db=Depends(get_db),
     current_user: AuthenticatedUser = Depends(get_current_user),
 ) -> dict:
@@ -54,20 +59,33 @@ async def list_appointments(
     
     Admin access required.
     """
-    # Authorization: only admins can access this endpoint
-    if current_user.role != "admin":
+    # Authorization: Admins see any salon, Owners/Reception see only their assigned salon
+    if current_user.role not in ["admin", "salon_owner", "reception"]:
         raise HTTPException(
             status_code=403,
             detail="Insufficient permissions.",
         )
+    
+    # Verify salon_id matches user's salon for non-admins
+    if current_user.role != "admin" and salon_id != current_user.salon_id:
+        raise HTTPException(
+            status_code=403,
+            detail="Access restricted to your assigned salon.",
+        )
 
-    statement = select(Appointment).options(joinedload(Appointment.customer)).where(Appointment.salon_id == salon_id)
+    # Main query with explicit join for filtering and loading
+    statement = (
+        select(Appointment)
+        .join(Customer)
+        .options(contains_eager(Appointment.customer))
+        .where(Appointment.salon_id == salon_id)
+    )
     
     # Date range filter
-    statement = statement.where(
-        Appointment.appointment_at >= date_from,
-        Appointment.appointment_at <= date_to,
-    )
+    if date_from:
+        statement = statement.where(Appointment.appointment_at >= date_from)
+    if date_to:
+        statement = statement.where(Appointment.appointment_at <= date_to)
     
     # Status filter
     if status:
@@ -80,6 +98,17 @@ async def list_appointments(
                 detail=f"Invalid status. Must be one of: {[s.value for s in AppointmentStatus]}",
             )
 
+    # Search filter
+    if search:
+        search_term = f"%{search}%"
+        statement = statement.where(
+            or_(
+                Customer.display_name.ilike(search_term),
+                Appointment.service_name_snapshot.ilike(search_term),
+                Appointment.booking_reference.ilike(search_term),
+            )
+        )
+
     statement = statement.order_by(Appointment.appointment_at)
     result = await db.execute(statement)
     appointments = result.scalars().unique().all()
@@ -89,7 +118,7 @@ async def list_appointments(
             "id": str(appt.id),
             "booking_reference": appt.booking_reference,
             "service": appt.service_name_snapshot,
-            "customer": appt.customer.display_name if appt.customer else None,
+            "customer": appt.customer.display_name if appt.customer else "Unknown",
             "appointment_at": appt.appointment_at.isoformat(),
             "status": appt.status.value,
             "final_price": float(appt.final_price) if appt.final_price else 0,
@@ -250,11 +279,8 @@ async def list_all_salon_appointments(
             detail="You do not have access to this salon's appointments.",
         )
 
-    appointment_service = AppointmentService(db)
-    # We need a new method in service or just a raw query here
-    # For now, let's do a raw query in the endpoint for simplicity
     from sqlalchemy import desc
-    
+
     statement = (
         select(Appointment)
         .options(joinedload(Appointment.customer), joinedload(Appointment.service))
@@ -263,6 +289,26 @@ async def list_all_salon_appointments(
     )
     result = await db.execute(statement)
     appointments = result.scalars().unique().all()
+
+    # Statuses that represent a still-active booking.
+    # If the appointment time has already passed and the status is one of
+    # these, we treat it as 'completed' in the response without persisting
+    # the change (the DB trigger / migration_v4 handles the real update).
+    _auto_complete_statuses = {
+        AppointmentStatus.CONFIRMED,
+        AppointmentStatus.PENDING,
+        AppointmentStatus.IN_PROGRESS,
+    }
+    now_utc = datetime.now(timezone.utc)
+
+    def _effective_status(apt: Appointment) -> str:
+        appt_time = apt.appointment_at
+        # Make timezone-aware if the stored value is naive
+        if appt_time.tzinfo is None:
+            appt_time = appt_time.replace(tzinfo=timezone.utc)
+        if appt_time < now_utc and apt.status in _auto_complete_statuses:
+            return AppointmentStatus.COMPLETED.value
+        return apt.status.value
 
     return {
         "appointments": [
@@ -273,7 +319,7 @@ async def list_all_salon_appointments(
                 "customer_id": str(appointment.customer_id) if appointment.customer_id else None,
                 "customer_name": appointment.customer.display_name if appointment.customer else "Unknown",
                 "appointment_at": appointment.appointment_at.isoformat(),
-                "status": appointment.status.value,
+                "status": _effective_status(appointment),
                 "final_price": float(appointment.final_price) if appointment.final_price else (
                     float(appointment.service.price) if appointment.service and appointment.service.price else 0
                 ),
@@ -329,6 +375,66 @@ async def list_upcoming_appointments(
             }
             for appointment in appointments
         ],
+    }
+
+
+@router.patch("/appointments/{appointment_id}/status")
+@shared_limiter.limit("60 per minute")
+async def update_appointment_status(
+    request: Request,
+    appointment_id: UUID,
+    payload: UpdateStatusRequest,
+    db=Depends(get_db),
+    current_user: AuthenticatedUser = Depends(get_current_user),
+) -> dict:
+    """Update the status of a single appointment (admin, salon_owner, reception).
+
+    Accepts both full enum values (e.g. 'cancelled_by_salon') and the simplified
+    UI labels ('pending', 'confirmed', 'completed', 'cancelled'). The simplified
+    'cancelled' maps to 'cancelled_by_salon' since this action is performed by staff.
+    """
+    # Map simplified UI labels to canonical enum values
+    _ui_to_enum: dict[str, str] = {
+        "cancelled": AppointmentStatus.CANCELLED_BY_SALON.value,
+    }
+    resolved_status = _ui_to_enum.get(payload.status, payload.status)
+
+    allowed_statuses = {s.value for s in AppointmentStatus}
+    if resolved_status not in allowed_statuses:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Invalid status '{payload.status}'. Allowed: pending, confirmed, completed, cancelled.",
+        )
+
+    result = await db.execute(
+        select(Appointment).where(Appointment.id == appointment_id)
+    )
+    appointment = result.scalar_one_or_none()
+    if not appointment:
+        raise HTTPException(status_code=404, detail="Appointment not found.")
+
+    # Tenant isolation: admins can update any appointment; others only within their salon
+    if current_user.role != "admin" and str(appointment.salon_id) != current_user.salon_id:
+        raise HTTPException(
+            status_code=403,
+            detail="You do not have permission to update appointments for this salon.",
+        )
+
+    appointment.status = AppointmentStatus(resolved_status)
+    await db.commit()
+    await db.refresh(appointment)
+
+    app_logger.info(
+        "Appointment status updated",
+        event="appointment_status_updated",
+        appointment_id=str(appointment_id),
+        new_status=resolved_status,
+        updated_by=current_user.user_id,
+    )
+    return {
+        "appointment_id": str(appointment.id),
+        "booking_reference": appointment.booking_reference,
+        "status": appointment.status.value,
     }
 
 

@@ -29,12 +29,18 @@ const processQueue = (error: AxiosError | null, token: string | null = null) => 
 
 apiClient.interceptors.request.use(async (config) => {
   const storedToken = useAuthStore.getState().token;
+  const storedUser = useAuthStore.getState().user;
+
+  if (config.headers.Authorization) {
+    return config;
+  }
+
+  if (storedToken) {
+    config.headers.Authorization = `Bearer ${storedToken}`;
+    return config;
+  }
 
   if (!supabase) {
-    // Demo mode fallback: still attach persisted token if present.
-    if (storedToken) {
-      config.headers.Authorization = `Bearer ${storedToken}`;
-    }
     return config;
   }
 
@@ -42,15 +48,13 @@ apiClient.interceptors.request.use(async (config) => {
     const { data: { session } } = await supabase.auth.getSession();
     if (session) {
       config.headers.Authorization = `Bearer ${session.access_token}`;
-    } else if (storedToken) {
-      // Fallback for startup races where session hydration lags behind persisted auth state.
-      config.headers.Authorization = `Bearer ${storedToken}`;
+
+      if (storedUser && storedToken !== session.access_token) {
+        useAuthStore.getState().setUser(storedUser, session.access_token);
+      }
     }
   } catch (error) {
     console.error('Failed to get session:', error);
-    if (storedToken) {
-      config.headers.Authorization = `Bearer ${storedToken}`;
-    }
   }
 
   return config;

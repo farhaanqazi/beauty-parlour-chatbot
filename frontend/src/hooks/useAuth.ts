@@ -4,123 +4,133 @@ import { supabase } from '../services/supabaseClient';
 import { useAuthStore } from '../store/authStore';
 import type { AuthUser } from '../types';
 
+let authInitializationPromise: Promise<void> | null = null;
+let authStateSubscriptionInitialized = false;
+
+const initializeAuthStore = async () => {
+  const { user: existingUser, setUser, clearUser, setLoading } = useAuthStore.getState();
+
+  if (existingUser) {
+    setLoading(false);
+    return;
+  }
+
+  if (!supabase) {
+    setLoading(false);
+    return;
+  }
+
+  const timeoutId = setTimeout(() => {
+    console.error('[useAuth] Auth initialization timed out after 10s');
+    useAuthStore.getState().setLoading(false);
+  }, 10_000);
+
+  try {
+    const { data: { session }, error } = await supabase.auth.getSession();
+
+    if (error || !session) {
+      clearTimeout(timeoutId);
+      clearUser();
+      return;
+    }
+
+    const { data: userData, error: userError } = await supabase
+      .from('users')
+      .select('*')
+      .eq('id', session.user.id)
+      .single();
+
+    if (userError || !userData || !userData.is_active) {
+      clearUser();
+      return;
+    }
+
+    setUser(userData as AuthUser, session.access_token);
+  } catch (error) {
+    console.error('Auth initialization error:', error);
+    clearUser();
+  } finally {
+    clearTimeout(timeoutId);
+    setLoading(false);
+  }
+};
+
+const ensureAuthInitialized = () => {
+  if (!authInitializationPromise) {
+    authInitializationPromise = initializeAuthStore().finally(() => {
+      authInitializationPromise = null;
+    });
+  }
+
+  return authInitializationPromise;
+};
+
+const ensureAuthStateSubscription = () => {
+  const client = supabase;
+
+  if (!client || authStateSubscriptionInitialized) {
+    return;
+  }
+
+  authStateSubscriptionInitialized = true;
+
+  client.auth.onAuthStateChange(async (event, session) => {
+    console.log('Auth state changed:', event);
+    const currentUser = useAuthStore.getState().user;
+    
+    switch (event) {
+      case 'SIGNED_IN':
+        if (session) {
+          const { data: userData } = await client
+            .from('users')
+            .select('*')
+            .eq('id', session.user.id)
+            .single();
+          
+          if (userData && userData.is_active) {
+            useAuthStore.getState().setUser(userData as AuthUser, session.access_token);
+          }
+        }
+        break;
+
+      case 'SIGNED_OUT':
+        useAuthStore.getState().clearUser();
+        break;
+
+      case 'TOKEN_REFRESHED':
+        if (session && currentUser) {
+          useAuthStore.getState().setUser(currentUser, session.access_token);
+        }
+        break;
+
+      case 'USER_UPDATED':
+        if (session && currentUser) {
+          const { data: userData } = await client
+            .from('users')
+            .select('*')
+            .eq('id', session.user.id)
+            .single();
+          
+          if (userData) {
+            useAuthStore.getState().setUser(userData as AuthUser, session.access_token);
+          }
+        }
+        break;
+    }
+  });
+};
+
 export const useAuth = () => {
   const { user, isLoading, setUser, clearUser, setLoading } = useAuthStore();
   const navigate = useNavigate();
-  
-  // Compute isAuthenticated from user state
   const isAuthenticated = !!user;
 
-  // Initialize auth state on mount.
-  // The Zustand persist store sets isLoading=false once localStorage is read,
-  // so this effect only needs to handle the truly-fresh (no persisted user) case.
   useEffect(() => {
-    const initializeAuth = async () => {
-      // If there's already a persisted user the store is ready — nothing to do.
-      // isLoading was already set to false by onRehydrateStorage.
-      const existingUser = useAuthStore.getState().user;
-      if (existingUser) return;
+    void ensureAuthInitialized();
+  }, []);
 
-      // No persisted user — check Supabase for an active session.
-      if (!supabase) {
-        setLoading(false);
-        return;
-      }
-
-      const timeoutId = setTimeout(() => {
-        console.error('[useAuth] Auth initialization timed out after 10s');
-        setLoading(false);
-      }, 10_000);
-
-      try {
-        const { data: { session }, error } = await supabase.auth.getSession();
-
-        if (error || !session) {
-          clearTimeout(timeoutId);
-          clearUser();
-          return;
-        }
-
-        const { data: userData, error: userError } = await supabase
-          .from('users')
-          .select('*')
-          .eq('id', session.user.id)
-          .single();
-
-        if (userError || !userData || !userData.is_active) {
-          clearUser();
-        } else {
-          setUser(userData as AuthUser, session.access_token);
-        }
-      } catch (error) {
-        console.error('Auth initialization error:', error);
-        clearUser();
-      } finally {
-        clearTimeout(timeoutId);
-        setLoading(false);
-      }
-    };
-
-    initializeAuth();
-  }, [setLoading, setUser, clearUser]);
-
-  // Listen for auth state changes
   useEffect(() => {
-    if (!supabase) return;
-
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(
-      async (event, session) => {
-        console.log('Auth state changed:', event);
-        const currentUser = useAuthStore.getState().user;
-        
-        switch (event) {
-          case 'SIGNED_IN':
-            if (session) {
-              // Fetch user profile on sign in
-              const { data: userData } = await supabase!
-                .from('users')
-                .select('*')
-                .eq('id', session.user.id)
-                .single();
-              
-              if (userData && userData.is_active) {
-                useAuthStore.getState().setUser(userData as AuthUser, session.access_token);
-              }
-            }
-            break;
-
-          case 'SIGNED_OUT':
-            useAuthStore.getState().clearUser();
-            break;
-
-          case 'TOKEN_REFRESHED':
-            if (session && currentUser) {
-              // Update token in store (user object stays the same)
-              useAuthStore.getState().setUser(currentUser, session.access_token);
-            }
-            break;
-
-          case 'USER_UPDATED':
-            if (session && currentUser) {
-              // Refresh user data
-              const { data: userData } = await supabase!
-                .from('users')
-                .select('*')
-                .eq('id', session.user.id)
-                .single();
-              
-              if (userData) {
-                useAuthStore.getState().setUser(userData as AuthUser, session.access_token);
-              }
-            }
-            break;
-        }
-      }
-    );
-
-    return () => {
-      subscription.unsubscribe();
-    };
+    ensureAuthStateSubscription();
   }, []);
 
   const login = useCallback(async (email: string, password: string) => {
@@ -135,8 +145,7 @@ export const useAuth = () => {
     try {
       console.log('[useAuth.login] Calling supabase.auth.signInWithPassword...');
 
-      // Add timeout to prevent infinite hang if Supabase is unreachable
-      const loginPromise = supabase!.auth.signInWithPassword({ email, password });
+      const loginPromise = supabase.auth.signInWithPassword({ email, password });
       const timeoutPromise = new Promise<never>((_, reject) =>
         setTimeout(() => reject(new Error('Login request timed out after 10s. Please check your connection and try again.')), 10_000)
       );
@@ -154,8 +163,7 @@ export const useAuth = () => {
       }
 
       console.log('[useAuth.login] Fetching user profile from Supabase...');
-      // Fetch user profile
-      const { data: userData, error: userError } = await supabase!
+      const { data: userData, error: userError } = await supabase
         .from('users')
         .select('*')
         .eq('id', data.session.user.id)
@@ -173,18 +181,12 @@ export const useAuth = () => {
         throw new Error('Your account is inactive. Contact your administrator.');
       }
 
-      // Explicitly set the user to state BEFORE navigating to avoid ProtectedRoute bouncing back
       console.log('[useAuth.login] Setting user state synchronously...');
-
-      // Set both Zustand store AND local state to ensure consistency
       useAuthStore.getState().setUser(userData as AuthUser, data.session.access_token);
-
-      // Also update local state via setUser to ensure isAuthenticated is true immediately
       setUser(userData as AuthUser, data.session.access_token);
 
       console.log('[useAuth.login] Navigation triggered. Role:', userData.role);
       
-      // Navigate based on role: admins go to salon selection, others go direct to role-specific dashboard
       if (userData.role === 'admin') {
         setLoading(false);
         setTimeout(() => navigate('/salon-select'), 0);
@@ -198,7 +200,6 @@ export const useAuth = () => {
         setLoading(false);
         navigate('/login');
       }
-
     } catch (error) {
       console.error('[useAuth.login] Exception caught:', error);
       setLoading(false);
@@ -207,10 +208,20 @@ export const useAuth = () => {
   }, [navigate, setLoading, setUser]);
 
   const logout = useCallback(async () => {
+    console.log('[useAuth.logout] Starting logout flow...');
     if (supabase) {
+      console.log('[useAuth.logout] Calling supabase.auth.signOut()...');
       await supabase.auth.signOut();
+      console.log('[useAuth.logout] Supabase signOut completed');
     }
+    
+    // Clear salon selection data
+    localStorage.removeItem('selectedSalonId');
+    localStorage.removeItem('selectedSalonName');
+    
+    console.log('[useAuth.logout] Clearing user state...');
     clearUser();
+    console.log('[useAuth.logout] Navigating to /login...');
     navigate('/login');
   }, [clearUser, navigate]);
 

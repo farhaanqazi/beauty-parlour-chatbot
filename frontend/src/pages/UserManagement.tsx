@@ -177,40 +177,35 @@ export default function UserManagement() {
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 to-amber-50">
-      {/* Header */}
-      <div className="border-b border-neutral-200 bg-white shadow-sm">
-        <div className="max-w-7xl mx-auto px-6 py-6">
-          <div className="flex items-center justify-between mb-2">
-            <div className="flex items-center gap-3">
-              <Users className="w-8 h-8 text-blue-600" />
-              <h1 className="text-3xl font-bold text-neutral-900">User Management</h1>
-            </div>
-            <button
-              onClick={() => {
-                setFormData({
-                  email: '',
-                  full_name: '',
-                  role: 'staff',
-                  salon_id: '',
-                });
-                setEditingId(null);
-                setShowForm(true);
-                setError(null);
-              }}
-              className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition"
-            >
-              <Plus className="w-5 h-5" />
-              Add User
-            </button>
-          </div>
-          <p className="text-neutral-600">
-            Manage staff, admins, and receptionist accounts
-          </p>
-        </div>
-      </div>
-
       {/* Main Content */}
       <div className="max-w-7xl mx-auto px-6 py-8">
+        {/* Page title row */}
+        <div className="flex items-center justify-between mb-6">
+          <div className="flex items-center gap-3">
+            <Users className="w-7 h-7 text-blue-600" />
+            <div>
+              <h1 className="text-2xl font-bold text-neutral-900">User Management</h1>
+              <p className="text-sm text-neutral-500">Manage staff, admins, and receptionist accounts</p>
+            </div>
+          </div>
+          <button
+            onClick={() => {
+              setFormData({
+                email: '',
+                full_name: '',
+                role: 'staff',
+                salon_id: '',
+              });
+              setEditingId(null);
+              setShowForm(true);
+              setError(null);
+            }}
+            className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition"
+          >
+            <Plus className="w-5 h-5" />
+            Add User
+          </button>
+        </div>
         {/* Search and Filters */}
         <div className="bg-white rounded-2xl shadow-sm border border-neutral-200 p-4 mb-6">
           <div className="flex flex-col gap-4">

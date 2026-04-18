@@ -454,10 +454,46 @@ class AppointmentService:
         """
         Schedule default notification jobs for an appointment.
 
-        Idempotent: uses INSERT ... ON CONFLICT DO NOTHING to prevent
-        duplicate jobs if called multiple times (e.g., after a retry).
+        Jobs scheduled per booking:
+          - REMINDER_7AM   : 07:00 salon local time on appointment day (morning-of reminder)
+          - CUSTOMER_REMINDER_60 : 60 min before appointment
+          - CUSTOMER_REMINDER_15 : 15 min before appointment
+          - SALON_DIGEST_60      : 60 min before (salon digest)
+          - SALON_DIGEST_15      : 15 min before (salon digest)
+
+        All jobs are skipped silently if their due_at is already in the past
+        at the time of booking — matching industry-standard "schedule-ahead"
+        behaviour (Sidekiq, Celery Beat, BullMQ all do the same).
         """
         now = utc_now()
+
+        # ── 1. 7 AM morning-of reminder ────────────────────────────────
+        # Derive the salon's local timezone from the appointment.
+        # Appointment.salon may not be loaded here, so we fetch it lazily
+        # via the salon_id FK. We inline a simple select to keep this
+        # self-contained and avoid circular loading.
+        from zoneinfo import ZoneInfo as _ZI
+        from app.db.models.salon import Salon as _Salon
+        salon_stmt = select(_Salon).where(_Salon.id == appointment.salon_id)
+        salon_result = await self.db.execute(salon_stmt)
+        salon_obj = salon_result.scalar_one_or_none()
+        salon_tz = _ZI(salon_obj.timezone if salon_obj and salon_obj.timezone else "Asia/Kolkata")
+
+        # Convert appointment time to local tz, then pin to 07:00:00 that day
+        appt_local = appointment.appointment_at.astimezone(salon_tz)
+        reminder_7am_local = appt_local.replace(hour=7, minute=0, second=0, microsecond=0)
+        reminder_7am_utc = reminder_7am_local.astimezone(ZoneInfo("UTC"))
+
+        if reminder_7am_utc > now:
+            self.db.add(NotificationJob(
+                appointment_id=appointment.id,
+                salon_id=appointment.salon_id,
+                job_type=NotificationJobType.REMINDER_7AM,
+                due_at=reminder_7am_utc,
+                payload={"reminder_type": "morning_of"},
+            ))
+
+        # ── 2. Standard pre-appointment reminders ──────────────────────
         job_specs: list[tuple[int, NotificationJobType]] = [
             (60, NotificationJobType.CUSTOMER_REMINDER_60),
             (15, NotificationJobType.CUSTOMER_REMINDER_15),

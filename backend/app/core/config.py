@@ -49,10 +49,8 @@ class Settings(BaseSettings):
     session_ttl_seconds: int = Field(default=86400, ge=1, validation_alias=AliasChoices("SESSION_TTL_SECONDS"))
 
     # Telegram Configuration
-    telegram_bot_token: Optional[str] = Field(
-        default=None,
-        validation_alias=AliasChoices("TELEGRAM_BOT_TOKEN"),
-    )
+    # Note: Bot tokens are stored per-salon in SalonChannel.provider_config["bot_token"].
+    # There is no global fallback token — every salon must have its token configured in the DB.
     telegram_bot_name: Optional[str] = Field(
         default=None,
         validation_alias=AliasChoices("TELEGRAM_BOT_NAME"),

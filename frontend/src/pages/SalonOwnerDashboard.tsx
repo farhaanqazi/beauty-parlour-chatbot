@@ -25,13 +25,14 @@ import {
   Settings,
   BarChart3,
   X,
-  ChevronRight,
   Loader2,
   FileText,
 } from 'lucide-react';
 import { useAuthStore } from '../store/authStore';
 import { useQuery } from '@tanstack/react-query';
 import apiClient from '../services/apiClient';
+import { useTodayAppointments } from '../hooks/useDashboardData';
+import AppointmentDrawer from '../components/appointments/AppointmentDrawer';
 
 // ============================================================
 // TYPES
@@ -52,8 +53,8 @@ interface Appointment {
   customer_name: string;
   service_name: string;
   appointment_at: string;
-  status: 'pending' | 'confirmed' | 'completed' | 'cancelled';
-  staff_name: string;
+  status: string;
+  staff_name: string | null;
 }
 
 interface RevenueByService {
@@ -111,7 +112,7 @@ const RevenueOverviewModal = ({
             animate={{ scale: 1, opacity: 1 }}
             exit={{ scale: 0.95, opacity: 0 }}
             transition={{ duration: 0.2 }}
-            className="bg-[var(--color-surface-raised)] border border-[var(--color-neutral-700)] rounded-3xl max-w-2xl w-full max-h-[80vh] overflow-hidden shadow-2xl"
+            className="bg-[var(--color-surface-raised)] border border-[var(--color-neutral-700)] rounded-3xl max-w-2xl w-full max-h-[80vh] flex flex-col overflow-hidden shadow-2xl"
             onClick={(e) => e.stopPropagation()}
           >
             {/* Header */}
@@ -144,11 +145,11 @@ const RevenueOverviewModal = ({
             </div>
 
             {/* Revenue by Service List - All Services */}
-            <div className="p-6 flex flex-col max-h-[60vh]">
-              <h3 className="text-sm font-semibold text-[var(--color-neutral-400)] uppercase tracking-wide mb-4">
+            <div className="flex flex-col flex-1 min-h-0">
+              <h3 className="text-sm font-semibold text-[var(--color-neutral-400)] uppercase tracking-wide px-6 pt-6 pb-4">
                 All Services by Revenue
               </h3>
-              <div className="flex-1 overflow-y-auto pr-2 space-y-3">
+              <div className="flex-1 overflow-y-auto px-6 pb-6 space-y-3 min-h-0">
                 {/* Filter out zero-revenue services, but show ALL that have revenue */}
                 {revenueByService
                   .filter(item => item.revenue > 0)
@@ -204,37 +205,6 @@ const RevenueOverviewModal = ({
     </AnimatePresence>
   );
 };
-
-// ============================================================
-// MOCK DATA (Temporary for appointments table)
-// ============================================================
-
-const mockAppointments: Appointment[] = [
-  {
-    id: '1',
-    customer_name: 'Priya Sharma',
-    service_name: 'Bridal Makeup',
-    appointment_at: '2026-04-11T10:00:00Z',
-    status: 'confirmed',
-    staff_name: 'Anjali',
-  },
-  {
-    id: '2',
-    customer_name: 'Neha Patel',
-    service_name: 'Hair Styling',
-    appointment_at: '2026-04-11T11:30:00Z',
-    status: 'pending',
-    staff_name: 'Priya',
-  },
-  {
-    id: '3',
-    customer_name: 'Kavya Singh',
-    service_name: 'Facial Treatment',
-    appointment_at: '2026-04-11T14:00:00Z',
-    status: 'confirmed',
-    staff_name: 'Anjali',
-  },
-];
 
 // ============================================================
 // COMPONENTS
@@ -315,8 +285,8 @@ const KPICard = ({ data, onClick }: { data: KPICard; onClick?: () => void }) => 
  * APPOINTMENT ROW
  * UI/UX Pro Max - Priority 2: Min 44px height for touch
  */
-const AppointmentRow = ({ appointment }: { appointment: Appointment }) => {
-  const statusColorMap = {
+const AppointmentRow = ({ appointment, onClick }: { appointment: Appointment; onClick?: () => void }) => {
+  const statusColorMap: Record<string, string> = {
     pending: 'bg-[var(--color-warning)]/20 text-[var(--color-warning)] border-[var(--color-warning)]/20',
     confirmed: 'bg-[var(--color-success)]/20 text-[var(--color-success)] border-[var(--color-success)]/20',
     completed: 'bg-[var(--color-info)]/20 text-[var(--color-info)] border-[var(--color-info)]/20',
@@ -338,7 +308,8 @@ const AppointmentRow = ({ appointment }: { appointment: Appointment }) => {
       initial={{ opacity: 0, x: -10 }}
       animate={{ opacity: 1, x: 0 }}
       transition={{ duration: 0.2 }}
-      className="grid grid-cols-1 md:grid-cols-5 gap-4 items-center p-4 border-b border-[var(--color-neutral-800)] hover:bg-[var(--color-surface-overlay)]/50 transition-colors duration-150 last:border-0"
+      onClick={onClick}
+      className="grid grid-cols-1 md:grid-cols-5 gap-4 items-center p-4 border-b border-[var(--color-neutral-800)] hover:bg-[var(--color-surface-overlay)]/50 transition-colors duration-150 last:border-0 cursor-pointer"
     >
       {/* Customer Name */}
       <div>
@@ -356,7 +327,7 @@ const AppointmentRow = ({ appointment }: { appointment: Appointment }) => {
 
       {/* Staff */}
       <div className="text-sm text-[var(--color-neutral-300)]">
-        {appointment.staff_name}
+        {appointment.staff_name || <span className="text-[var(--color-neutral-500)] italic">Unassigned</span>}
       </div>
 
       {/* Status Badge */}
@@ -414,6 +385,7 @@ export default function SalonOwnerDashboard() {
     'overview'
   );
   const [showRevenueOverview, setShowRevenueOverview] = useState(false);
+  const [selectedAppointment, setSelectedAppointment] = useState<any>(null);
 
   // Fetch real KPI data from backend
   const { data: kpiData, isLoading: kpisLoading, error: kpiError } = useQuery({
@@ -421,6 +393,9 @@ export default function SalonOwnerDashboard() {
     queryFn: fetchKPIs,
     refetchInterval: 60000, // Refetch every minute
   });
+
+  // Fetch today's appointments from backend
+  const { data: todayAppointments, isLoading: appointmentsLoading } = useTodayAppointments();
 
   if (user?.role !== 'salon_owner') {
     return (
@@ -478,22 +453,13 @@ export default function SalonOwnerDashboard() {
 
   return (
     <div className="min-h-screen bg-[var(--color-surface-base)] text-[var(--color-neutral-100)]">
-      {/* HEADER */}
-      <div className="sticky top-0 z-40 bg-[var(--color-surface-raised)]/80 backdrop-blur-sm border-b border-[var(--color-neutral-800)] px-4 md:px-8 py-6">
-        <div className="max-w-7xl mx-auto flex items-center justify-between">
-          <div>
-            <h1 className="text-3xl font-bold">Salon Owner Dashboard</h1>
-            <p className="text-[var(--color-neutral-400)] mt-1">
-              Welcome back, {user?.full_name}
-            </p>
-          </div>
-          <button
-            className="flex items-center gap-2 px-4 py-2.5 bg-[var(--color-accent)] text-[var(--color-surface-base)] font-semibold rounded-lg hover:bg-[var(--color-accent-hover)] transition-colors duration-150 focus:outline-none focus:ring-2 focus:ring-[var(--color-accent)]/50 focus:ring-offset-2 focus:ring-offset-[var(--color-surface-base)]"
-            aria-label="Settings"
-          >
-            <Settings className="w-5 h-5" />
-            Settings
-          </button>
+      {/* Page title bar */}
+      <div className="border-b border-[var(--color-neutral-800)] px-4 md:px-8 py-4">
+        <div className="max-w-7xl mx-auto">
+          <h1 className="text-xl font-bold">Salon Owner Dashboard</h1>
+          <p className="text-[var(--color-neutral-400)] text-sm mt-0.5">
+            Welcome back, {user?.full_name}
+          </p>
         </div>
       </div>
 
@@ -566,7 +532,7 @@ export default function SalonOwnerDashboard() {
             <div>
               <SectionHeader
                 title="Today's Appointments"
-                description="12 appointments scheduled"
+                description={`${todayAppointments?.length || 0} appointments scheduled`}
                 action={
                   <button
                     className="flex items-center gap-2 px-4 py-2.5 bg-[var(--color-surface-overlay)] border border-[var(--color-neutral-700)] text-[var(--color-neutral-200)] font-medium rounded-lg hover:bg-[var(--color-surface-floating)] transition-colors duration-150 focus:outline-none focus:ring-2 focus:ring-[var(--color-accent)]/50"
@@ -586,9 +552,35 @@ export default function SalonOwnerDashboard() {
                   <div className="text-right">Action</div>
                 </div>
                 <div>
-                  {mockAppointments.map((apt) => (
-                    <AppointmentRow key={apt.id} appointment={apt} />
-                  ))}
+                  {appointmentsLoading ? (
+                    <div className="flex items-center justify-center py-12">
+                      <Loader2 className="w-8 h-8 text-[var(--color-accent)] animate-spin" />
+                    </div>
+                  ) : todayAppointments && todayAppointments.length > 0 ? (
+                    todayAppointments.map((apt) => (
+                      <AppointmentRow
+                        key={apt.id}
+                        appointment={apt}
+                        onClick={() =>
+                          setSelectedAppointment({
+                            id: apt.id,
+                            booking_reference: (apt as any).booking_reference ?? apt.id,
+                            service: apt.service_name,
+                            customer: apt.customer_name,
+                            customer_id: (apt as any).customer_id ?? undefined,
+                            appointment_at: apt.appointment_at,
+                            status: apt.status as any,
+                            final_price: apt.final_price,
+                          })
+                        }
+                      />
+                    ))
+                  ) : (
+                    <div className="text-center py-12 text-[var(--color-neutral-400)]">
+                      <Calendar className="w-12 h-12 mx-auto mb-4 opacity-50" />
+                      <p>No appointments scheduled for today</p>
+                    </div>
+                  )}
                 </div>
               </div>
             </div>
@@ -635,29 +627,53 @@ export default function SalonOwnerDashboard() {
           </motion.div>
         )}
 
-        {/* APPOINTMENTS TAB - Redirect to full appointments page */}
+        {/* APPOINTMENTS TAB - Full appointments management */}
         {selectedTab === 'appointments' && (
           <motion.div
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.3 }}
-            className="text-center py-12"
           >
-            <p className="text-[var(--color-neutral-400)] mb-4">Opening full appointments view...</p>
-            {setTimeout(() => navigate('/owner/appointments'), 100) && null}
+            <div className="text-center py-12">
+              <Calendar className="w-16 h-16 text-[var(--color-accent)] mx-auto mb-4" />
+              <h3 className="text-xl font-semibold text-[var(--color-neutral-100)] mb-2">
+                Appointments Management
+              </h3>
+              <p className="text-[var(--color-neutral-400)] mb-6">
+                View and manage all your appointments
+              </p>
+              <button
+                onClick={() => navigate('/owner/appointments')}
+                className="px-6 py-3 bg-[var(--color-accent)] text-[var(--color-surface-base)] font-semibold rounded-lg hover:bg-[var(--color-accent-hover)] transition-colors"
+              >
+                Open Full Appointments View
+              </button>
+            </div>
           </motion.div>
         )}
 
-        {/* ANALYTICS TAB - Redirect to analytics page */}
+        {/* ANALYTICS TAB - Analytics dashboard */}
         {selectedTab === 'analytics' && (
           <motion.div
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.3 }}
-            className="text-center py-12"
           >
-            <p className="text-[var(--color-neutral-400)] mb-4">Opening analytics dashboard...</p>
-            {setTimeout(() => navigate('/analytics'), 100) && null}
+            <div className="text-center py-12">
+              <BarChart3 className="w-16 h-16 text-[var(--color-accent)] mx-auto mb-4" />
+              <h3 className="text-xl font-semibold text-[var(--color-neutral-100)] mb-2">
+                Analytics & Reports
+              </h3>
+              <p className="text-[var(--color-neutral-400)] mb-6">
+                View detailed analytics and business insights
+              </p>
+              <button
+                onClick={() => navigate('/analytics')}
+                className="px-6 py-3 bg-[var(--color-accent)] text-[var(--color-surface-base)] font-semibold rounded-lg hover:bg-[var(--color-accent-hover)] transition-colors"
+              >
+                Open Analytics Dashboard
+              </button>
+            </div>
           </motion.div>
         )}
       </main>
@@ -668,6 +684,11 @@ export default function SalonOwnerDashboard() {
         onClose={() => setShowRevenueOverview(false)}
         revenueByService={kpiData?.revenue_by_service || []}
         totalRevenue={kpiData?.total_revenue || 0}
+      />
+
+      <AppointmentDrawer
+        appointment={selectedAppointment}
+        onClose={() => setSelectedAppointment(null)}
       />
     </div>
   );

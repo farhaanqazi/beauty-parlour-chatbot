@@ -113,7 +113,9 @@ class NotificationService:
                 await self._mark_job_sent(job)
                 return
 
-            if job.job_type in {NotificationJobType.CUSTOMER_REMINDER_60, NotificationJobType.CUSTOMER_REMINDER_15}:
+            if job.job_type == NotificationJobType.REMINDER_7AM:
+                await self._send_morning_reminder(job, appointment)
+            elif job.job_type in {NotificationJobType.CUSTOMER_REMINDER_60, NotificationJobType.CUSTOMER_REMINDER_15}:
                 await self._send_customer_reminder(job, appointment)
             elif job.job_type == NotificationJobType.CUSTOMER_CANCELLATION:
                 await self._send_customer_cancellation(job, appointment)
@@ -126,6 +128,84 @@ class NotificationService:
             await self._mark_job_sent(job)
         except Exception as exc:  # noqa: BLE001
             await self._mark_job_failed(job, str(exc))
+
+    async def _send_morning_reminder(self, job: NotificationJob, appointment: Appointment) -> None:
+        """
+        Send the 7 AM morning-of reminder to the customer.
+
+        Industry-standard grace window:
+        ─────────────────────────────────────────────────────────────────
+        Scheduled job systems (Sidekiq, Celery Beat, AWS SQS, Google Cloud
+        Tasks) all handle server downtime the same way:
+
+          • If the job fires within GRACE_WINDOW_HOURS of its due_at,
+            send the message — a late reminder is better than none.
+
+          • If more than GRACE_WINDOW_HOURS have passed, the appointment
+            may be imminent or already done. Skip with status SKIPPED.
+            (No-one wants a 7 AM reminder delivered at 2 PM.)
+
+        GRACE_WINDOW_HOURS = 2 (7 AM → latest send by 9 AM)
+        ─────────────────────────────────────────────────────────────────
+        """
+        GRACE_WINDOW_HOURS = 2
+
+        now = utc_now()
+        # Skip if we are more than GRACE_WINDOW_HOURS past the scheduled time
+        if now > job.due_at + timedelta(hours=GRACE_WINDOW_HOURS):
+            job.status = NotificationJobStatus.SKIPPED
+            job.last_error = (
+                f"Skipped: processed {(now - job.due_at).seconds // 60} min late "
+                f"(grace window is {GRACE_WINDOW_HOURS}h)"
+            )
+            await self.db.commit()
+            return
+
+        # Only send for active appointments — skip cancelled / completed
+        if appointment.status != AppointmentStatus.CONFIRMED:
+            job.status = NotificationJobStatus.SKIPPED
+            job.last_error = f"Skipped: appointment status is '{appointment.status.value}'"
+            await self.db.commit()
+            return
+
+        salon = await self.tenant_service.get_salon_by_id(appointment.salon_id)
+        if not salon or not appointment.customer:
+            return
+
+        channel_config = self.tenant_service.get_channel_config(salon, appointment.channel)
+        destination = self._customer_destination(appointment)
+        if not channel_config or not destination:
+            raise ValueError("Missing channel configuration or destination for 7 AM reminder.")
+
+        from zoneinfo import ZoneInfo as _ZI
+        local_time = appointment.appointment_at.astimezone(_ZI(salon.timezone))
+        customer_name = appointment.customer.display_name or "there"
+        message_text = (
+            f"Good morning {customer_name}! 🌸\n"
+            f"This is a friendly reminder that you have an appointment at {salon.name} today.\n"
+            f"Service: {appointment.service_name_snapshot}\n"
+            f"Time: {local_time.strftime('%I:%M %p')}\n"
+            f"Booking ref: {appointment.booking_reference}\n"
+            f"We look forward to seeing you!"
+        )
+        localized_text = await self.llm_service.localize_text(message_text, appointment.language)
+        deliveries = await self.dispatcher.send_instruction(
+            channel_config=channel_config,
+            destination=destination,
+            instruction=OutboundInstruction(text=localized_text),
+        )
+        for delivery in deliveries:
+            self.db.add(
+                OutboundMessage(
+                    salon_id=salon.id,
+                    customer_id=appointment.customer_id,
+                    channel=appointment.channel,
+                    destination=destination,
+                    text=delivery.text,
+                    provider_message_id=delivery.provider_message_id,
+                    payload=delivery.payload,
+                )
+            )
 
     async def _process_digest_jobs(self, jobs: Iterable[NotificationJob]) -> int:
         grouped: dict[tuple[str, NotificationJobType], list[NotificationJob]] = defaultdict(list)

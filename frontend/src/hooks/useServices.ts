@@ -12,76 +12,105 @@ export interface Service {
   sample_image_urls?: string[];
 }
 
+export interface CreateServicePayload {
+  name: string;
+  code: string;
+  description?: string;
+  duration_minutes: number;
+  price: number;
+  is_active?: boolean;
+}
+
+export interface UpdateServicePayload {
+  name?: string;
+  description?: string;
+  duration_minutes?: number;
+  price?: number;
+  is_active?: boolean;
+}
+
 export interface UseServicesState {
   services: Service[];
   loading: boolean;
   error: string | null;
 }
 
-export function useServices(salonId: string) {
+export function useServices(salonId: string | null | undefined) {
   const [state, setState] = useState<UseServicesState>({
     services: [],
-    loading: true,
+    loading: !!salonId, // only start in loading if we actually have an id
     error: null,
   });
 
   const fetchServices = useCallback(async () => {
+    if (!salonId) {
+      setState({ services: [], loading: false, error: null });
+      return;
+    }
     try {
       setState(prev => ({ ...prev, loading: true, error: null }));
-      
-      // Get salon details which includes services
-      const response = await apiClient.get(`/salons/${salonId}`);
+      const response = await apiClient.get(`/api/v1/salons/${salonId}`);
       setState({
         services: response.data?.services || [],
         loading: false,
         error: null,
       });
-    } catch (err) {
-      setState(prev => ({
-        ...prev,
+    } catch (err: any) {
+      setState({
+        services: [],
         loading: false,
-        error: err instanceof Error ? err.message : 'Failed to fetch services',
-      }));
+        error:
+          err?.response?.data?.detail ||
+          err?.message ||
+          'Failed to fetch services',
+      });
     }
   }, [salonId]);
 
   useEffect(() => {
-    if (salonId) {
-      fetchServices();
-    }
-  }, [salonId, fetchServices]);
-
-  // Note: These would require backend endpoints to be implemented
-  const updateService = useCallback(
-    async (_serviceId: string, _updates: Partial<Service>) => {
-      try {
-        // TODO: Implement in backend - PATCH /services/{serviceId}
-        console.warn('updateService requires backend implementation');
-        await fetchServices();
-      } catch (err) {
-        throw err instanceof Error ? err : new Error('Failed to update service');
-      }
-    },
-    [fetchServices]
-  );
+    fetchServices();
+  }, [fetchServices]);
 
   const createService = useCallback(
-    async (_serviceData: Omit<Service, 'id'>) => {
-      try {
-        // TODO: Implement in backend - POST /services
-        console.warn('createService requires backend implementation');
-        await fetchServices();
-      } catch (err) {
-        throw err instanceof Error ? err : new Error('Failed to create service');
-      }
+    async (serviceData: CreateServicePayload): Promise<Service> => {
+      if (!salonId) throw new Error('No salon selected');
+      const response = await apiClient.post(
+        `/api/v1/salons/${salonId}/services`,
+        serviceData
+      );
+      await fetchServices();
+      return response.data;
     },
-    [fetchServices]
+    [salonId, fetchServices]
+  );
+
+  const updateService = useCallback(
+    async (serviceId: string, updates: UpdateServicePayload): Promise<Service> => {
+      if (!salonId) throw new Error('No salon selected');
+      const response = await apiClient.patch(
+        `/api/v1/salons/${salonId}/services/${serviceId}`,
+        updates
+      );
+      await fetchServices();
+      return response.data;
+    },
+    [salonId, fetchServices]
+  );
+
+  const deleteService = useCallback(
+    async (serviceId: string): Promise<void> => {
+      if (!salonId) throw new Error('No salon selected');
+      await apiClient.delete(`/api/v1/salons/${salonId}/services/${serviceId}`);
+      await fetchServices();
+    },
+    [salonId, fetchServices]
   );
 
   return {
     ...state,
     refetch: fetchServices,
-    updateService,
     createService,
+    updateService,
+    deleteService,
   };
 }

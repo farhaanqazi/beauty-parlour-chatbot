@@ -66,7 +66,8 @@ export const useDashboardStats = () => {
 
 /**
  * Fetch today's appointments for the user's salon
- * 
+ * Filters to only show appointments scheduled for today
+ *
  * @example
  * const { data: appointments, isLoading } = useTodayAppointments();
  */
@@ -77,7 +78,23 @@ export const useTodayAppointments = () => {
 
   return useQuery({
     queryKey: ['dashboard', 'appointments', 'today', salonId],
-    queryFn: () => salonId ? fetchUpcomingAppointments(salonId, 24) : Promise.resolve([]),
+    queryFn: async () => {
+      if (!salonId) return [];
+      
+      // Fetch upcoming appointments (next 24 hours)
+      const allAppointments = await fetchUpcomingAppointments(salonId, 24);
+      
+      // Filter to only today's appointments
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      const tomorrow = new Date(today);
+      tomorrow.setDate(tomorrow.getDate() + 1);
+      
+      return allAppointments.filter(apt => {
+        const aptDate = new Date(apt.appointment_at);
+        return aptDate >= today && aptDate < tomorrow;
+      });
+    },
     staleTime: 10000,
     retry: 2,
     enabled: !!salonId && !!token,
@@ -139,12 +156,19 @@ export const useUpdateAppointmentStatus = () => {
   return useMutation({
     mutationFn: updateAppointmentStatus,
     onSuccess: () => {
-      // Invalidate and refetch today's appointments
-      queryClient.invalidateQueries({ 
-        queryKey: ['dashboard', 'appointments', 'today', user?.salon_id] 
+      // Use the same salonId key that the queries were registered under
+      const salonId = localStorage.getItem('selectedSalonId') || user?.salon_id;
+      // Invalidate all appointment cache variants so the dashboard refreshes
+      queryClient.invalidateQueries({
+        queryKey: ['dashboard', 'appointments', 'today', salonId],
+      });
+      queryClient.invalidateQueries({
+        queryKey: ['dashboard', 'appointments', 'all', salonId],
+      });
+      queryClient.invalidateQueries({
+        queryKey: ['dashboard', 'revenue', 'weekly', salonId],
       });
     },
-    // Optional: Add onError and onSettled for more robust handling
   });
 };
 

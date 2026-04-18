@@ -84,6 +84,7 @@ export interface AppointmentFilters {
   status?: AppointmentStatus | '';
   date_from?: string;
   date_to?: string;
+  search?: string;
   page: number;
   page_size: number;
 }

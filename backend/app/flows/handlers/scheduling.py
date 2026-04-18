@@ -455,6 +455,15 @@ async def handle_scheduling(
                 return FlowResult(state=state, should_update_appointment=True, clear_state=True), state_was_reset
             # Normal booking: proceed to email
             engine._advance_step(state, ConversationStep.EMAIL)
+            return FlowResult(
+                state=state,
+                messages=[
+                    OutboundInstruction(
+                        text="Please provide your email address for booking confirmation (optional):",
+                        buttons=[{"label": "⏭️ Skip", "callback": "action_skip_email"}],
+                    )
+                ],
+            ), state_was_reset
         elif cleaned_text == "time_confirm_no":
             # User wants to change time, go back to time selection
             state.step = ConversationStep.APPOINTMENT_TIME
@@ -548,6 +557,15 @@ async def handle_scheduling(
 
                 if confirmation is True:
                     engine._advance_step(state, ConversationStep.EMAIL)
+                    return FlowResult(
+                        state=state,
+                        messages=[
+                            OutboundInstruction(
+                                text="Please provide your email address for booking confirmation (optional):",
+                                buttons=[{"label": "⏭️ Skip", "callback": "action_skip_email"}],
+                            )
+                        ],
+                    ), state_was_reset
                 elif confirmation is False:
                     state.step = ConversationStep.APPOINTMENT_TIME
                     state.slots.appointment_time = None
@@ -574,8 +592,31 @@ async def handle_scheduling(
                         ],
                     ), state_was_reset
 
-    # --- EMAIL (reached directly OR via fall-through from TIME_CONFIRMATION) ---
+    # --- EMAIL ---
     if state.step == ConversationStep.EMAIL:
+        # User might have clicked "Skip" button or typed "skip"
+        if cleaned_text.lower() in {"skip", "action_skip_email", "skip email"}:
+            state.slots.email = None
+            engine._advance_step(state, ConversationStep.CONFIRMATION)
+            return FlowResult(
+                state=state,
+                messages=[
+                    OutboundInstruction(
+                        text=flow_config["confirmation_template"].format(
+                            service=state.slots.service_name,
+                            date=state.slots.appointment_date.strftime("%d %b %Y"),
+                            time=state.slots.appointment_time.strftime("%I:%M %p"),
+                        ),
+                        buttons=[
+                            {"label": "\u2705 YES", "callback": "confirm_yes"},
+                            {"label": "\u274c NO", "callback": "confirm_no"},
+                            {"label": "\u270f\ufe0f Change Email", "callback": "change_email"},
+                            {"label": "\U0001f504 Start Over", "callback": "restart_flow"},
+                        ],
+                    )
+                ],
+            ), state_was_reset
+
         # Handle email input
         email = cleaned_text.strip()
         # Basic email validation
@@ -585,6 +626,7 @@ async def handle_scheduling(
                 "Please provide a valid email address (e.g., name@example.com).",
             )
             result.messages[0].buttons = [
+                {"label": "⏭️ Skip", "callback": "action_skip_email"},
                 {"label": "\U0001f504 Start Over", "callback": "restart_flow"}
             ]
             return result, state_was_reset

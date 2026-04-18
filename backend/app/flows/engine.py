@@ -255,7 +255,9 @@ class ConversationEngine:
             minutes = int(rel_match.group(1))
             hour = int(rel_match.group(2))
             if 1 <= hour <= 12 and 0 <= minutes <= 59:
-                return time(hour + 12, minutes)
+                if hour != 12:
+                    hour += 12
+                return time(hour, minutes)
             elif 13 <= hour <= 23 and 0 <= minutes <= 59:
                 return time(hour, minutes)
 
@@ -267,7 +269,8 @@ class ConversationEngine:
             minutes = int(rel_match.group(1))
             hour = int(rel_match.group(2))
             if 1 <= hour <= 12 and 0 <= minutes <= 59:
-                total = hour * 60 + 12 * 60 - minutes  # PM
+                pm_hour = hour if hour == 12 else hour + 12
+                total = pm_hour * 60 - minutes
                 h, m = divmod(total, 60)
                 return time(h, m)
             elif 13 <= hour <= 23 and 0 <= minutes <= 59:
@@ -280,14 +283,18 @@ class ConversationEngine:
         if rel_match:
             hour = int(rel_match.group(1))
             if 1 <= hour <= 12:
-                return time(hour + 12, 15)
+                if hour != 12:
+                    hour += 12
+                return time(hour, 15)
 
         # Handle "half past X" → X:30
         rel_match = re.match(r'^half\s+past\s+(\d{1,2})$', cleaned)
         if rel_match:
             hour = int(rel_match.group(1))
             if 1 <= hour <= 12:
-                return time(hour + 12, 30)
+                if hour != 12:
+                    hour += 12
+                return time(hour, 30)
 
         # Pre-check 1: Dot-separated time formats (H.M, HH.MM, etc.)
         # e.g., "3.3" → 15:03, "5.30" → 17:30, "9.15" → 21:15
@@ -296,8 +303,8 @@ class ConversationEngine:
         if match:
             hour, minute = int(match.group(1)), int(match.group(2))
             if 0 <= hour <= 23 and 0 <= minute <= 59:
-                # In booking context, hours 1-12 = PM
-                if 1 <= hour <= 12:
+                # In booking context, hours 1-12 = PM (12 stays as 12 = noon)
+                if 1 <= hour < 12:
                     hour += 12
                 return time(hour, minute)
 
@@ -320,13 +327,13 @@ class ConversationEngine:
             if 0 <= hour <= 23:
                 return time(hour, 0)
 
-        # Pre-check 4: Single digit (1-12) - assume PM
+        # Pre-check 4: Single digit (1-12) - assume PM (12 stays as 12 = noon)
         match = re.match(r'^(\d{1,2})$', cleaned)
         if match:
             hour = int(match.group(1))
-            if 1 <= hour <= 12:
+            if 1 <= hour < 12:
                 return time(hour + 12, 0)
-            elif 13 <= hour <= 23:
+            elif 12 <= hour <= 23:
                 return time(hour, 0)
 
         # === PASS 2: dateparser for natural language ===

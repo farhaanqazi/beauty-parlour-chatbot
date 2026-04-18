@@ -12,8 +12,5 @@ export default defineConfig({
   },
   server: {
     port: 3000,
-    // Serve index.html for every unknown path so React Router handles routing.
-    // Without this, a browser refresh on /dashboard returns a 404 from the dev server.
-    historyApiFallback: true,
   },
 });

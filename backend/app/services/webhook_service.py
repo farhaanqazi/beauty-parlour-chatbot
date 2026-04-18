@@ -4,13 +4,14 @@ from typing import Any
 
 from app.core.enums import ChannelType
 from app.schemas.messages import NormalizedInboundMessage
+from app.utils.logger import app_logger
 
 
 class WebhookService:
     @staticmethod
     def normalize_telegram_update(salon_slug: str, payload: dict[str, Any]) -> list[NormalizedInboundMessage]:
         messages: list[NormalizedInboundMessage] = []
-        
+
         # Handle regular text messages
         message = payload.get("message") or payload.get("edited_message")
         if message:

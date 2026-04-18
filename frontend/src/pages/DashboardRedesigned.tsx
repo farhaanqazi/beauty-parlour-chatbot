@@ -34,7 +34,6 @@ import {
   CheckCircle2,
   AlertCircle,
   X,
-  LogOut,
   Store
 } from 'lucide-react';
 import { useDashboardStats, useAllAppointments, useStaffList, useWeeklyRevenue } from '../hooks/useDashboardData';
@@ -44,6 +43,8 @@ import NewAppointmentModal from '../components/dashboard/NewAppointmentModal';
 // ============================================================================
 // Loading Skeletons
 // ============================================================================
+
+const chartSkeletonHeights = ['32%', '56%', '44%', '68%', '52%', '74%', '48%'];
 
 const StatCardSkeleton = () => (
   <div className="bg-[var(--color-surface-raised)] rounded-2xl p-6 border border-[var(--color-neutral-700)] shadow-sm animate-pulse">
@@ -82,8 +83,8 @@ const ChartSkeleton = () => (
       </div>
     </div>
     <div className="flex items-end justify-between gap-2 h-48">
-      {[1, 2, 3, 4, 5, 6, 7].map((i) => (
-        <div key={i} className="flex-1 bg-[var(--color-neutral-700)] rounded-t-lg" style={{ height: `${Math.random() * 60 + 20}%` }} />
+      {chartSkeletonHeights.map((height, index) => (
+        <div key={index} className="flex-1 bg-[var(--color-neutral-700)] rounded-t-lg" style={{ height }} />
       ))}
     </div>
   </div>
@@ -165,8 +166,8 @@ const StatCard = ({
     onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') onClick?.(); }}
     className={`
       bg-[var(--color-surface-raised)] rounded-2xl p-6 border shadow-sm hover:shadow-[var(--shadow-glow)] transition-all cursor-pointer select-none
-      ${isSelected 
-        ? 'border-[var(--color-accent)] ring-2 ring-[var(--color-accent)]/50 bg-[var(--color-surface-raised)]/95' 
+      ${isSelected
+        ? 'border-[var(--color-accent)] ring-2 ring-[var(--color-accent)]/50 bg-[var(--color-surface-raised)]/95'
         : 'border-[var(--color-neutral-700)] hover:border-[var(--color-neutral-600)]'
       }
     `}
@@ -341,28 +342,40 @@ const DashboardRedesigned = () => {
   const [searchQuery, setSearchQuery] = useState('');
   const [isNewAptModalOpen, setIsNewAptModalOpen] = useState(false);
   const [activeFilter, setActiveFilter] = useState<string>('today'); // Default to 'today'
-  const { user, isLoading: authLoading, logout } = useAuth();
+  const { user, isLoading: authLoading } = useAuth();
   const navigate = useNavigate();
-
-  // Guard: admin must choose a salon before reaching this page.
-  // Non-admins use their own salon_id so no selection is needed.
-  const selectedSalonId = localStorage.getItem('selectedSalonId');
-  if (!authLoading && user?.role === 'admin' && !selectedSalonId) {
-    return <Navigate to="/salon-select" replace />;
-  }
 
   // Fetch real data from Supabase via backend
   const { isLoading: statsLoading, error: statsError, refetch: refetchStats } = useDashboardStats();
   const { data: allAppointments, isLoading: allLoading } = useAllAppointments();
   const { data: staff, isLoading: staffLoading, error: staffError } = useStaffList();
+  const selectedSalonId = localStorage.getItem('selectedSalonId');
+
+  // Appointments whose scheduled time is already past are treated as
+  // 'completed' regardless of their actual DB status (confirmed/pending/in_progress).
+  // This mirrors the backend's auto_complete logic and the migration_v4 trigger.
+  // NOTE: Defined before early-return guards so it is always available in this render scope.
+  const PAST_COMPLETES_AS_DONE = new Set(['confirmed', 'pending', 'in_progress']);
+  const isEffectivelyCompleted = (apt: any): boolean => {
+    if (!apt || !apt.appointment_at) return false;
+    if (apt.status === 'completed') return true;
+    if (PAST_COMPLETES_AS_DONE.has(apt.status)) {
+      return new Date(apt.appointment_at) < new Date();
+    }
+    return false;
+  };
+
+  if (!authLoading && user?.role === 'admin' && !selectedSalonId) {
+    return <Navigate to="/salon-select" replace />;
+  }
 
   // Filter appointments based on search AND active filter
   const filteredAppointments = allAppointments?.filter((apt: any) => {
     // 1. Search Filter
-    const matchesSearch = !searchQuery || 
-                          apt.customer_name?.toLowerCase().includes(searchQuery.toLowerCase()) || 
-                          apt.service_name?.toLowerCase().includes(searchQuery.toLowerCase());
-    
+    const matchesSearch = !searchQuery ||
+      apt.customer_name?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      apt.service_name?.toLowerCase().includes(searchQuery.toLowerCase());
+
     if (!matchesSearch) return false;
 
     // 2. Status/Time Filter
@@ -371,12 +384,21 @@ const DashboardRedesigned = () => {
       const today = new Date();
       return aptDate.toDateString() === today.toDateString();
     }
-    
+
     if (activeFilter === 'all') {
       return true;
     }
-    
-    // Status filter (pending, confirmed, completed)
+
+    if (activeFilter === 'completed') {
+      return isEffectivelyCompleted(apt);
+    }
+
+    // Status filter (pending, confirmed) — exclude past appointments
+    // that should already be showing as completed
+    if (activeFilter === 'pending' || activeFilter === 'confirmed') {
+      if (isEffectivelyCompleted(apt)) return false;
+    }
+
     return apt.status === activeFilter;
   }) || [];
 
@@ -388,33 +410,9 @@ const DashboardRedesigned = () => {
   if (statsLoading) {
     return (
       <div className="min-h-screen bg-[var(--color-surface-base)]">
-        <header className="sticky top-0 z-50 bg-[var(--color-surface-raised)]/80 backdrop-blur-xl border-b border-[var(--color-neutral-700)] shadow-sm">
-          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-            <div className="flex items-center justify-between h-16">
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 bg-gradient-to-br from-[var(--color-accent)] to-amber-600 rounded-xl flex items-center justify-center shadow-lg shadow-[var(--color-accent)]/30">
-                  <Star className="w-6 h-6 text-[var(--color-surface-base)]" strokeWidth={2} />
-                </div>
-                <div>
-                  <h1 className="text-lg font-bold text-[var(--color-neutral-100)]">Salon</h1>
-                  <p className="text-xs text-[var(--color-neutral-400)]">Dashboard</p>
-                </div>
-              </div>
-            </div>
-          </div>
-        </header>
         <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
             {[1, 2, 3, 4].map((i) => <StatCardSkeleton key={i} />)}
-          </div>
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-            <div className="lg:col-span-2">
-              <AppointmentsSkeleton />
-            </div>
-            <div className="space-y-6">
-              <ChartSkeleton />
-              <ChartSkeleton />
-            </div>
           </div>
         </main>
       </div>
@@ -435,73 +433,36 @@ const DashboardRedesigned = () => {
 
   return (
     <div className="min-h-screen bg-[var(--color-surface-base)]">
-      {/* Header */}
-      <header className="sticky top-0 z-50 bg-[var(--color-surface-raised)]/80 backdrop-blur-xl border-b border-[var(--color-neutral-700)] shadow-sm">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex items-center justify-between h-16">
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 bg-gradient-to-br from-[var(--color-accent)] to-amber-600 rounded-xl flex items-center justify-center shadow-lg shadow-[var(--color-accent)]/30">
-                <Star className="w-6 h-6 text-[var(--color-surface-base)]" strokeWidth={2} aria-hidden="true" />
-              </div>
-              <div>
-                <h1 className="text-lg font-bold text-[var(--color-neutral-100)]">Salon</h1>
-                <p className="text-xs text-[var(--color-neutral-400)]">Dashboard</p>
-              </div>
-            </div>
-
-            <div className="flex items-center gap-2">
-              {/* Change Salon button - only for admins */}
-              {user?.role === 'admin' && (
-                <button
-                  onClick={() => navigate('/salon-select')}
-                  className="inline-flex items-center gap-2 px-3 py-2 text-sm text-[var(--color-neutral-300)] hover:text-[var(--color-accent)] hover:bg-[var(--color-neutral-700)] rounded-xl transition-colors"
-                  title="Change Salon"
-                >
-                  <Store className="w-4 h-4" />
-                  <span className="hidden sm:inline">Change Salon</span>
-                </button>
-              )}
-
-              <div className="relative hidden md:block">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-[var(--color-neutral-500)]" strokeWidth={2} />
-                <input
-                  type="search"
-                  placeholder="Search appointments..."
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  className="w-64 h-10 pl-10 pr-4 bg-[var(--color-neutral-800)] border border-[var(--color-neutral-700)] rounded-xl text-sm text-[var(--color-neutral-100)] placeholder-[var(--color-neutral-500)] focus:outline-none focus:ring-2 focus:ring-[var(--color-accent)] focus:bg-[var(--color-neutral-700)] transition-all"
-                  aria-label="Search appointments"
-                />
-              </div>
-
-              <button className="relative p-2.5 hover:bg-[var(--color-neutral-700)] rounded-xl transition-colors focus:outline-none focus:ring-2 focus:ring-[var(--color-accent)] focus:ring-offset-2 focus:ring-offset-[var(--color-surface-raised)]" aria-label="Notifications">
-                <Bell className="w-5 h-5 text-[var(--color-neutral-300)]" strokeWidth={2} />
-                <span className="absolute top-1.5 right-1.5 w-2 h-2 bg-rose-500 rounded-full" />
-              </button>
-
+      {/* Main Content Area */}
+      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        {/* Page Hero - Unified with Top Header */}
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-8">
+          <div>
+            <h1 className="text-2xl font-bold text-[var(--color-neutral-100)]">Salon Dashboard</h1>
+            <p className="text-sm text-[var(--color-neutral-400)] mt-1">
+              Real-time overview of your salon's performance
+            </p>
+          </div>
+          
+          <div className="flex flex-wrap items-center gap-3">
+            {user?.role === 'admin' && (
               <button
-                onClick={logout}
-                className="relative p-2.5 hover:bg-[var(--color-neutral-700)] rounded-xl transition-colors focus:outline-none focus:ring-2 focus:ring-rose-400 focus:ring-offset-2 focus:ring-offset-[var(--color-surface-raised)]"
-                aria-label="Log Out"
-                title="Log Out"
+                onClick={() => navigate('/salon-select')}
+                className="flex items-center gap-2 px-4 py-2 bg-[var(--color-surface-overlay)] border border-[var(--color-neutral-700)] text-[var(--color-neutral-200)] rounded-xl hover:border-[var(--color-accent)]/50 transition-all text-sm font-medium"
               >
-                <LogOut className="w-5 h-5 text-[var(--color-neutral-300)] hover:text-rose-400 transition-colors" strokeWidth={2} />
+                <Store className="w-4 h-4 text-[var(--color-accent)]" />
+                <span>Change Salon</span>
               </button>
-
-              <button
-                onClick={() => setIsNewAptModalOpen(true)}
-                className="inline-flex items-center gap-2 px-4 py-2.5 bg-gradient-to-r from-[var(--color-accent)] to-amber-600 hover:from-amber-500 hover:to-amber-700 text-[var(--color-surface-base)] font-medium rounded-xl shadow-lg shadow-[var(--color-accent)]/30 transition-all focus:outline-none focus:ring-2 focus:ring-[var(--color-accent)] focus:ring-offset-2 focus:ring-offset-[var(--color-surface-raised)]"
-              >
-                <Plus className="w-5 h-5" strokeWidth={2} />
-                <span className="hidden sm:inline">New Appointment</span>
-              </button>
-            </div>
+            )}
+            <button
+              onClick={() => setIsNewAptModalOpen(true)}
+              className="inline-flex items-center gap-2 px-5 py-2.5 bg-gradient-to-r from-[var(--color-accent)] to-amber-600 hover:from-amber-500 hover:to-amber-700 text-[var(--color-surface-base)] font-medium rounded-xl shadow-lg shadow-[var(--color-accent)]/30 transition-all"
+            >
+              <Plus className="w-5 h-5" />
+              <span>New Appointment</span>
+            </button>
           </div>
         </div>
-      </header>
-
-      {/* Main Content */}
-      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         {/* Stats Grid */}
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4 mb-8">
           <StatCard
@@ -524,21 +485,21 @@ const DashboardRedesigned = () => {
           />
           <StatCard
             label="Pending"
-            value={allAppointments?.filter((a: any) => a.status === 'pending').length ?? 0}
+            value={allAppointments?.filter((a: any) => a.status === 'pending' && !isEffectivelyCompleted(a)).length ?? 0}
             icon={Clock}
             isSelected={activeFilter === 'pending'}
             onClick={() => handleFilterChange('pending')}
           />
           <StatCard
             label="Confirmed"
-            value={allAppointments?.filter((a: any) => a.status === 'confirmed').length ?? 0}
+            value={allAppointments?.filter((a: any) => a.status === 'confirmed' && !isEffectivelyCompleted(a)).length ?? 0}
             icon={CheckCircle2}
             isSelected={activeFilter === 'confirmed'}
             onClick={() => handleFilterChange('confirmed')}
           />
           <StatCard
             label="Completed"
-            value={allAppointments?.filter((a: any) => a.status === 'completed').length ?? 0}
+            value={allAppointments?.filter(isEffectivelyCompleted).length ?? 0}
             icon={DollarSign}
             isSelected={activeFilter === 'completed'}
             onClick={() => handleFilterChange('completed')}
@@ -557,11 +518,11 @@ const DashboardRedesigned = () => {
                       {activeFilter === 'today' ? "Today's Appointments" : activeFilter === 'all' ? 'All Bookings' : `${activeFilter.charAt(0).toUpperCase() + activeFilter.slice(1)} Appointments`}
                     </h2>
                     <p className="text-sm text-[var(--color-neutral-400)] mt-0.5">
-                      {activeFilter === 'today' 
+                      {activeFilter === 'today'
                         ? `${filteredAppointments?.length ?? 0} appointments today`
                         : activeFilter === 'all'
-                        ? `${filteredAppointments?.length ?? 0} all bookings`
-                        : `Showing ${filteredAppointments?.length ?? 0} ${activeFilter} appointment${(filteredAppointments?.length ?? 0) !== 1 ? 's' : ''}`
+                          ? `${filteredAppointments?.length ?? 0} all bookings`
+                          : `Showing ${filteredAppointments?.length ?? 0} ${activeFilter} appointment${(filteredAppointments?.length ?? 0) !== 1 ? 's' : ''}`
                       }
                     </p>
                   </div>

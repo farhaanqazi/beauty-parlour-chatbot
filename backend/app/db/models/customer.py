@@ -18,6 +18,7 @@ class Customer(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     channel: Mapped[ChannelType] = mapped_column(db_channel_type, nullable=False)
     external_user_id: Mapped[str] = mapped_column(String(255), nullable=False)
     phone_number: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    email: Mapped[str | None] = mapped_column(String(255), nullable=True)
     telegram_chat_id: Mapped[str | None] = mapped_column(String(60), nullable=True)
     display_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     preferred_language: Mapped[str | None] = mapped_column(String(40), nullable=True)

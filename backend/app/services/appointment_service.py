@@ -618,6 +618,128 @@ class AppointmentService:
         return None
 
     # ------------------------------------------------------------------
+    # AVAILABILITY — READ-ONLY QUERIES FOR BOOKING DISPLAY
+    # ------------------------------------------------------------------
+
+    async def get_booked_hours_for_date(
+        self,
+        salon_id: UUID,
+        target_date: date,
+        timezone_name: str,
+        start_hour: int = 9,
+        end_hour: int = 18,
+    ) -> set[int]:
+        """
+        Return the set of hours (salon local time) within [start_hour, end_hour)
+        that are unavailable on target_date due to confirmed or pending appointments.
+
+        An hour H is considered booked when any appointment's window
+        [appt_start, appt_start + duration + 15 min buffer) overlaps [H:00, H+1:00).
+        """
+        tz = ZoneInfo(timezone_name)
+        day_start_utc = datetime(
+            target_date.year, target_date.month, target_date.day, 0, 0, 0, tzinfo=tz
+        ).astimezone(ZoneInfo("UTC"))
+        day_end_utc = datetime(
+            target_date.year, target_date.month, target_date.day, 23, 59, 59, tzinfo=tz
+        ).astimezone(ZoneInfo("UTC"))
+
+        stmt = (
+            select(Appointment)
+            .options(selectinload(Appointment.service))
+            .where(
+                Appointment.salon_id == salon_id,
+                Appointment.status.in_([AppointmentStatus.CONFIRMED, AppointmentStatus.PENDING]),
+                Appointment.appointment_at >= day_start_utc,
+                Appointment.appointment_at <= day_end_utc,
+            )
+        )
+        result = await self.db.execute(stmt)
+        appointments = result.scalars().unique().all()
+
+        booked: set[int] = set()
+        for appt in appointments:
+            appt_local = appt.appointment_at.astimezone(tz)
+            dur = DEFAULT_DURATION_MINUTES
+            if appt.service and appt.service.duration_minutes:
+                dur = appt.service.duration_minutes
+            appt_end = appt_local + timedelta(minutes=dur + 15)
+
+            end_total_min = appt_end.hour * 60 + appt_end.minute
+            last_hour = (end_total_min - 1) // 60 if end_total_min > 0 else appt_local.hour
+
+            for h in range(appt_local.hour, min(last_hour + 1, 24)):
+                if start_hour <= h < end_hour:
+                    booked.add(h)
+
+        return booked
+
+    async def get_fully_booked_dates(
+        self,
+        salon_id: UUID,
+        from_date: date,
+        num_days: int,
+        timezone_name: str,
+        start_hour: int = 9,
+        end_hour: int = 18,
+    ) -> set[date]:
+        """
+        Return which dates in [from_date, from_date + num_days) have every
+        bookable hour [start_hour, end_hour) covered by existing appointments.
+
+        Uses a single query for the whole range to minimise round-trips.
+        """
+        if num_days <= 0:
+            return set()
+
+        tz = ZoneInfo(timezone_name)
+        check_dates = [from_date + timedelta(days=i) for i in range(num_days)]
+        max_date = check_dates[-1]
+
+        range_start_utc = datetime(
+            from_date.year, from_date.month, from_date.day, 0, 0, 0, tzinfo=tz
+        ).astimezone(ZoneInfo("UTC"))
+        range_end_utc = datetime(
+            max_date.year, max_date.month, max_date.day, 23, 59, 59, tzinfo=tz
+        ).astimezone(ZoneInfo("UTC"))
+
+        stmt = (
+            select(Appointment)
+            .options(selectinload(Appointment.service))
+            .where(
+                Appointment.salon_id == salon_id,
+                Appointment.status.in_([AppointmentStatus.CONFIRMED, AppointmentStatus.PENDING]),
+                Appointment.appointment_at >= range_start_utc,
+                Appointment.appointment_at <= range_end_utc,
+            )
+        )
+        result = await self.db.execute(stmt)
+        appointments = result.scalars().unique().all()
+
+        date_booked_hours: dict[date, set[int]] = {d: set() for d in check_dates}
+
+        for appt in appointments:
+            appt_local = appt.appointment_at.astimezone(tz)
+            appt_date = appt_local.date()
+            if appt_date not in date_booked_hours:
+                continue
+
+            dur = DEFAULT_DURATION_MINUTES
+            if appt.service and appt.service.duration_minutes:
+                dur = appt.service.duration_minutes
+            appt_end = appt_local + timedelta(minutes=dur + 15)
+
+            end_total_min = appt_end.hour * 60 + appt_end.minute
+            last_hour = (end_total_min - 1) // 60 if end_total_min > 0 else appt_local.hour
+
+            for h in range(appt_local.hour, min(last_hour + 1, 24)):
+                if start_hour <= h < end_hour:
+                    date_booked_hours[appt_date].add(h)
+
+        all_hours = set(range(start_hour, end_hour))
+        return {d for d, booked in date_booked_hours.items() if all_hours.issubset(booked)}
+
+    # ------------------------------------------------------------------
     # INTERNAL HELPERS
     # ------------------------------------------------------------------
 

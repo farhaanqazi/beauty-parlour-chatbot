@@ -138,12 +138,12 @@ async def handle_management(
             engine._advance_step(state, ConversationStep.APPOINTMENT_DATE)
             state.previous_step = ConversationStep.MANAGE_APPOINTMENT_MENU
             # Date and time are already pre-filled from the appointment
-            date_buttons = engine._build_date_buttons(salon.timezone, include_back=True)
+            date_buttons, booked_text = engine._build_date_buttons(salon.timezone, include_back=True)
             return FlowResult(
                 state=state,
                 messages=[
                     OutboundInstruction(
-                        text="Let's pick a new date for your appointment.\n\U0001f4a1 Or type your preferred date (e.g. next Friday, 25/04/2026)",
+                        text="Let's pick a new date for your appointment.\n\U0001f4a1 Or type your preferred date (e.g. next Friday, 25/04/2026)" + booked_text,
                         buttons=date_buttons,
                     )
                 ],

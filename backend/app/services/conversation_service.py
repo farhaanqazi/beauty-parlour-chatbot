@@ -187,7 +187,7 @@ class ConversationService:
                         )
                     ]
                     result.state.intent = UserIntent.NEW_BOOKING
-                    result.state.step = ConversationStep.GREETING
+                    result.state.step = ConversationStep.MAIN_MENU
                 else:
                     # If multiple appointments, let user select which one to manage
                     if len(upcoming) > 1:
@@ -319,6 +319,12 @@ class ConversationService:
             instructions = result.messages
             if result.state.slots.language:
                 customer.preferred_language = result.state.slots.language
+            # Persist email and phone number collected during booking back to the customer row
+            if result.state.slots.email:
+                customer.email = result.state.slots.email
+            if result.state.slots.phone_number and not customer.phone_number:
+                # Only write phone if it wasn't already captured from the channel (WhatsApp)
+                customer.phone_number = result.state.slots.phone_number
 
             # --- CANCELLATION INTERCEPT ---
             if result.should_cancel_appointment and result.state.target_appointment_id:

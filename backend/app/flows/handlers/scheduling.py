@@ -25,6 +25,48 @@ if TYPE_CHECKING:
     from app.flows.engine import ConversationEngine
 
 
+def _prefer_business_hour_for_ambiguous_time(
+    engine: "ConversationEngine",
+    salon: Salon,
+    raw_text: str,
+    parsed_time: time | None,
+) -> time | None:
+    """Resolve inputs like "9", "9.15", or "5:30" to the in-hours meaning."""
+    if parsed_time is None:
+        return None
+
+    cleaned = raw_text.strip().lower()
+    if re.search(r"\b(am|pm)\b", cleaned):
+        return parsed_time
+
+    match = re.match(r"^(\d{1,2})(?:[.:](\d{1,2}))?$", cleaned)
+    if not match:
+        return parsed_time
+
+    hour = int(match.group(1))
+    minute = int(match.group(2) or 0)
+    if not (1 <= hour <= 12 and 0 <= minute <= 59):
+        return parsed_time
+
+    start_hour, end_hour = engine._get_business_hours(salon)
+
+    def is_business_time(candidate: time) -> bool:
+        return start_hour <= candidate.hour < end_hour
+
+    if is_business_time(parsed_time):
+        return parsed_time
+
+    candidates = [time(hour, minute)]
+    if hour < 12:
+        candidates.append(time(hour + 12, minute))
+
+    for candidate in candidates:
+        if is_business_time(candidate):
+            return candidate
+
+    return parsed_time
+
+
 async def handle_scheduling(
     engine: "ConversationEngine",
     state: ConversationState,
@@ -125,13 +167,13 @@ async def handle_scheduling(
         max_booking_date = datetime.now(ZoneInfo(salon.timezone)).date() + timedelta(days=90)
         if appointment_date > max_booking_date:
             # Date is too far in the future - show error and date buttons immediately
-            date_buttons = engine._build_date_buttons(salon.timezone)
+            date_buttons, booked_text = engine._build_date_buttons(salon.timezone)
             return FlowResult(
                 state=state,
                 messages=[
                     OutboundInstruction(text="Appointments can only be booked up to 3 months in advance."),
                     OutboundInstruction(
-                        text="Please choose a date within the next 7 days:\n\U0001f4a1 Or type your preferred date (e.g. next Friday, 25/04/2026)",
+                        text="Please choose a date within the next 7 days:\n\U0001f4a1 Or type your preferred date (e.g. next Friday, 25/04/2026)" + booked_text,
                         buttons=date_buttons,
                     ),
                 ],
@@ -212,13 +254,13 @@ async def handle_scheduling(
                 if appointment_date > max_booking_date:
                     state.step = ConversationStep.APPOINTMENT_DATE
                     state.slots.appointment_date = None
-                    date_buttons = engine._build_date_buttons(salon.timezone)
+                    date_buttons, booked_text = engine._build_date_buttons(salon.timezone)
                     return FlowResult(
                         state=state,
                         messages=[
                             OutboundInstruction(text="Appointments can only be booked up to 3 months in advance."),
                             OutboundInstruction(
-                                text="Please choose a date within the next 7 days:\n\U0001f4a1 Or type your preferred date (e.g. next Friday, 25/04/2026)",
+                                text="Please choose a date within the next 7 days:\n\U0001f4a1 Or type your preferred date (e.g. next Friday, 25/04/2026)" + booked_text,
                                 buttons=date_buttons,
                             ),
                         ],
@@ -292,26 +334,26 @@ async def handle_scheduling(
                 except (ValueError, AttributeError):
                     pass
 
-            time_buttons = engine._build_time_buttons(start_hour, end_hour)
+            time_buttons, booked_text = engine._build_time_buttons(start_hour, end_hour)
 
             return FlowResult(
                 state=state,
                 messages=[
                     OutboundInstruction(
-                        text="What time would you like to book?\n\U0001f4a1 Or type your preferred time (e.g. 4:30 PM, 17:30)",
+                        text="What time would you like to book?\n\U0001f4a1 Or type your preferred time (e.g. 4:30 PM, 17:30)" + booked_text,
                         buttons=time_buttons,
                     )
                 ],
             ), state_was_reset
         else:
             # User said No, return to date selection
-            date_buttons = engine._build_date_buttons(salon.timezone)
+            date_buttons, booked_text = engine._build_date_buttons(salon.timezone)
 
             return FlowResult(
                 state=state,
                 messages=[
                     OutboundInstruction(
-                        text="Please choose your preferred appointment date:\n\U0001f4a1 Or type your preferred date (e.g. next Friday, 25/04/2026)",
+                        text="Please choose your preferred appointment date:\n\U0001f4a1 Or type your preferred date (e.g. next Friday, 25/04/2026)" + booked_text,
                         buttons=date_buttons,
                     )
                 ],
@@ -353,6 +395,9 @@ async def handle_scheduling(
                     salon.timezone,
                     state.slots.appointment_date,
                     state.slots.language,
+                )
+                appointment_time = _prefer_business_hour_for_ambiguous_time(
+                    engine, salon, cleaned_text, appointment_time
                 )
 
         if not appointment_time:
@@ -498,6 +543,9 @@ async def handle_scheduling(
                     state.slots.appointment_date,
                     state.slots.language,
                 )
+                appointment_time = _prefer_business_hour_for_ambiguous_time(
+                    engine, salon, cleaned_text, appointment_time
+                )
 
                 if not appointment_time:
                     # Can't parse, go back to time selection
@@ -597,22 +645,13 @@ async def handle_scheduling(
         # User might have clicked "Skip" button or typed "skip"
         if cleaned_text.lower() in {"skip", "action_skip_email", "skip email"}:
             state.slots.email = None
-            engine._advance_step(state, ConversationStep.CONFIRMATION)
+            engine._advance_step(state, ConversationStep.PHONE_NUMBER)
             return FlowResult(
                 state=state,
                 messages=[
                     OutboundInstruction(
-                        text=flow_config["confirmation_template"].format(
-                            service=state.slots.service_name,
-                            date=state.slots.appointment_date.strftime("%d %b %Y"),
-                            time=state.slots.appointment_time.strftime("%I:%M %p"),
-                        ),
-                        buttons=[
-                            {"label": "\u2705 YES", "callback": "confirm_yes"},
-                            {"label": "\u274c NO", "callback": "confirm_no"},
-                            {"label": "\u270f\ufe0f Change Email", "callback": "change_email"},
-                            {"label": "\U0001f504 Start Over", "callback": "restart_flow"},
-                        ],
+                        text="Please share your phone number so we can reach you about your appointment:",
+                        buttons=[{"label": "⏭️ Skip", "callback": "action_skip_phone"}],
                     )
                 ],
             ), state_was_reset
@@ -632,6 +671,58 @@ async def handle_scheduling(
             return result, state_was_reset
 
         state.slots.email = email
+        engine._advance_step(state, ConversationStep.PHONE_NUMBER)
+        return FlowResult(
+            state=state,
+            messages=[
+                OutboundInstruction(
+                    text="Please share your phone number so we can reach you about your appointment:",
+                    buttons=[{"label": "⏭️ Skip", "callback": "action_skip_phone"}],
+                )
+            ],
+        ), state_was_reset
+
+    # --- PHONE NUMBER ---
+    if state.step == ConversationStep.PHONE_NUMBER:
+        # Allow skipping
+        if cleaned_text.lower() in {"skip", "action_skip_phone", "skip phone"}:
+            state.slots.phone_number = None
+            engine._advance_step(state, ConversationStep.CONFIRMATION)
+            return FlowResult(
+                state=state,
+                messages=[
+                    OutboundInstruction(
+                        text=flow_config["confirmation_template"].format(
+                            service=state.slots.service_name,
+                            date=state.slots.appointment_date.strftime("%d %b %Y"),
+                            time=state.slots.appointment_time.strftime("%I:%M %p"),
+                        ),
+                        buttons=[
+                            {"label": "✅ YES", "callback": "confirm_yes"},
+                            {"label": "❌ NO", "callback": "confirm_no"},
+                            {"label": "✏️ Change Phone", "callback": "change_phone"},
+                            {"label": "🔄 Start Over", "callback": "restart_flow"},
+                        ],
+                    )
+                ],
+            ), state_was_reset
+
+        # Strip everything that is not a digit so users can type +91 98765 43210, etc.
+        digits_only = re.sub(r"\D", "", cleaned_text.strip())
+
+        if len(digits_only) < 10:
+            result, _ = engine._invalid_reply(
+                state,
+                "Please enter a valid phone number with at least 10 digits (e.g., 9876543210).",
+            )
+            result.messages[0].buttons = [
+                {"label": "⏭️ Skip", "callback": "action_skip_phone"},
+                {"label": "🔄 Start Over", "callback": "restart_flow"},
+            ]
+            return result, state_was_reset
+
+        # Store the cleaned digit string (preserve leading country code if present)
+        state.slots.phone_number = digits_only
         engine._advance_step(state, ConversationStep.CONFIRMATION)
         return FlowResult(
             state=state,
@@ -643,10 +734,10 @@ async def handle_scheduling(
                         time=state.slots.appointment_time.strftime("%I:%M %p"),
                     ),
                     buttons=[
-                        {"label": "\u2705 YES", "callback": "confirm_yes"},
-                        {"label": "\u274c NO", "callback": "confirm_no"},
-                        {"label": "\u270f\ufe0f Change Email", "callback": "change_email"},
-                        {"label": "\U0001f504 Start Over", "callback": "restart_flow"},
+                        {"label": "✅ YES", "callback": "confirm_yes"},
+                        {"label": "❌ NO", "callback": "confirm_no"},
+                        {"label": "✏️ Change Phone", "callback": "change_phone"},
+                        {"label": "🔄 Start Over", "callback": "restart_flow"},
                     ],
                 )
             ],

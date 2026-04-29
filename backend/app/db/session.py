@@ -1,14 +1,59 @@
 from __future__ import annotations
 
 import ssl
-from pathlib import Path
 from typing import Optional
-from urllib.parse import urlparse, parse_qs
+from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
 import certifi
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.core.config import Settings
+
+
+def normalize_database_url_for_asyncpg(db_url: str) -> tuple[str, str]:
+    """
+    Normalize common Supabase/Postgres URL schemes for SQLAlchemy + asyncpg.
+
+    Supabase may show pooler URLs as postgres://, while SQLAlchemy expects the
+    postgresql+asyncpg driver name. asyncpg also rejects sslmode as a URL query
+    parameter, so this returns the cleaned URL and the requested SSL mode.
+    """
+    db_url = db_url.strip()
+
+    if not db_url:
+        raise ValueError("DATABASE_URL is not set")
+
+    if db_url.startswith("postgresql+asyncpg://"):
+        parse_url = "postgresql://" + db_url.split("://", 1)[1]
+    elif db_url.startswith("postgres://"):
+        parse_url = "postgresql://" + db_url.split("://", 1)[1]
+    else:
+        parse_url = db_url
+
+    parsed = urlparse(parse_url)
+    if parsed.scheme != "postgresql":
+        raise ValueError(
+            "DATABASE_URL must start with postgresql+asyncpg://, postgresql://, or postgres://"
+        )
+
+    if not parsed.hostname:
+        raise ValueError("Could not parse hostname from DATABASE_URL")
+
+    query_params = parse_qs(parsed.query)
+    ssl_mode = query_params.get("sslmode", ["require"])[0]
+    clean_query = {k: v for k, v in query_params.items() if k != "sslmode"}
+    clean_url = urlunparse(
+        (
+            "postgresql+asyncpg",
+            parsed.netloc,
+            parsed.path,
+            parsed.params,
+            urlencode(clean_query, doseq=True),
+            parsed.fragment,
+        )
+    )
+
+    return clean_url, ssl_mode
 
 
 def create_db_engine(settings: Settings):
@@ -21,50 +66,11 @@ def create_db_engine(settings: Settings):
     - Recycles connections to prevent Supabase timeout issues
     - Validates DATABASE_URL format and presence
     """
-    db_url = settings.database_url.strip()
-
-    if not db_url:
-        raise ValueError("DATABASE_URL is not set")
-
-    # Normalize URL for parsing
-    if db_url.startswith("postgresql+asyncpg://"):
-        parse_url = db_url.replace("postgresql+asyncpg://", "postgresql://", 1)
-    else:
-        parse_url = db_url
-
-    # Parse URL to extract sslmode and remove it from the URL
-    # asyncpg doesn't accept sslmode as a query param, only via connect_args
-    parsed = urlparse(parse_url)
-    hostname = parsed.hostname
-    
-    if not hostname:
-        raise ValueError("Could not parse hostname from DATABASE_URL")
-    
-    # Parse query params
-    query_params = parse_qs(parsed.query)
-    ssl_mode = query_params.get('sslmode', ['require'])[0]
-    
-    # Remove sslmode from query string (asyncpg will reject it)
-    clean_query = {k: v for k, v in query_params.items() if k != 'sslmode'}
-    
-    # Rebuild URL without sslmode param
-    from urllib.parse import urlencode, urlunparse
-    clean_url = urlunparse((
-        parsed.scheme,
-        parsed.netloc,
-        parsed.path,
-        parsed.params,
-        urlencode(clean_query, doseq=True),
-        parsed.fragment
-    ))
-    
-    # Ensure we use the postgresql+asyncpg:// scheme
-    if not clean_url.startswith("postgresql+asyncpg://"):
-        clean_url = "postgresql+asyncpg://" + clean_url.replace("postgresql://", "", 1)
+    clean_url, ssl_mode = normalize_database_url_for_asyncpg(settings.database_url)
 
     # Create SSL context based on sslmode
     ssl_context = None
-    if ssl_mode in ('require', 'verify-full', 'verify-ca'):
+    if ssl_mode in ("require", "verify-full", "verify-ca"):
         # For Supabase: Use SSL encryption without full cert chain verification
         # This is the standard approach documented by Supabase
         ssl_context = ssl.create_default_context(cafile=certifi.where())

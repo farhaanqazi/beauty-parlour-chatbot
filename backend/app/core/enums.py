@@ -48,6 +48,7 @@ class ConversationStep(str, Enum):
     APPOINTMENT_TIME = "appointment_time"
     TIME_CONFIRMATION = "time_confirmation"  # New step for time verification
     EMAIL = "email"
+    PHONE_NUMBER = "phone_number"
     CONFIRMATION = "confirmation"
     COMPLETE = "complete"
 

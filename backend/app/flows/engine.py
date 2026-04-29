@@ -380,10 +380,42 @@ class ConversationEngine:
         return None
 
     @staticmethod
-    def _build_date_buttons(timezone_name: str, include_back: bool = False) -> list[dict[str, str]]:
-        """Build the 7-day quick-date button list. Optionally prepend a ⬅️ Back button."""
+    def _get_business_hours(salon: Salon) -> tuple[int, int]:
+        """Return (start_hour, end_hour) from salon config, defaulting to 9–18."""
+        start_hour, end_hour = 9, 18
+        if hasattr(salon, "flow_config") and salon.flow_config:
+            start_hour = int(salon.flow_config.get("opening_hour", 9))
+            end_hour = int(salon.flow_config.get("closing_hour", 18))
+        elif hasattr(salon, "business_hours") and salon.business_hours:
+            try:
+                hours_str = str(salon.business_hours)
+                if "-" in hours_str:
+                    start_str, end_str = hours_str.split("-")
+                    start_hour = int(start_str.split(":")[0])
+                    end_hour = int(end_str.split(":")[0])
+            except (ValueError, AttributeError):
+                pass
+        return start_hour, end_hour
+
+    @staticmethod
+    def _build_date_buttons(
+        timezone_name: str,
+        include_back: bool = False,
+        fully_booked_dates: set | None = None,
+    ) -> tuple[list[dict[str, str]], str]:
+        """Build the 7-day quick-date button list.
+
+        Fully-booked dates are excluded from buttons and listed in the returned
+        ``booked_text`` fragment (with ~strikethrough~ Telegram/WhatsApp formatting)
+        so callers can append it to the message body as social proof.
+
+        Returns ``(buttons, booked_text)`` — ``booked_text`` is ``""`` when no
+        dates are fully booked.
+        """
         today = datetime.now(ZoneInfo(timezone_name)).date()
         buttons: list[dict[str, str]] = []
+        booked_labels: list[str] = []
+
         for i in range(7):
             target_date = today + timedelta(days=i)
             if i == 0:
@@ -392,23 +424,57 @@ class ConversationEngine:
                 label = "Tomorrow"
             else:
                 label = target_date.strftime("%a %d %b")
-            buttons.append({"label": label, "callback": f"date_{target_date.isoformat()}"})
+
+            if fully_booked_dates and target_date in fully_booked_dates:
+                booked_labels.append(f"~{label}~")
+            else:
+                buttons.append({"label": label, "callback": f"date_{target_date.isoformat()}"})
+
         if include_back:
             buttons.append({"label": "⬅️ Back", "callback": "go_back"})
         buttons.append({"label": "🔄 Start Over", "callback": "restart_flow"})
-        return buttons
+
+        booked_text = (
+            "\n\n❌ *Fully booked:* " + "  ".join(booked_labels)
+            if booked_labels
+            else ""
+        )
+        return buttons, booked_text
 
     @staticmethod
-    def _build_time_buttons(start_hour: int, end_hour: int) -> list[dict[str, str]]:
-        """Build hourly time-slot buttons from start_hour up to (not including) end_hour."""
+    def _build_time_buttons(
+        start_hour: int,
+        end_hour: int,
+        booked_hours: set[int] | None = None,
+    ) -> tuple[list[dict[str, str]], str]:
+        """Build hourly time-slot buttons from start_hour up to (not including) end_hour.
+
+        Booked hours are excluded from buttons and listed in the returned
+        ``booked_text`` fragment with ~strikethrough~ formatting.
+
+        Returns ``(buttons, booked_text)`` — ``booked_text`` is ``""`` when all
+        slots are available.
+        """
         buttons: list[dict[str, str]] = []
+        booked_labels: list[str] = []
+
         for hour in range(start_hour, end_hour):
             time_obj = time(hour=hour, minute=0)
             label = time_obj.strftime("%I:%M %p").lstrip("0")
-            buttons.append({"label": label, "callback": f"time_{hour:02d}:00"})
+            if booked_hours and hour in booked_hours:
+                booked_labels.append(f"~{label}~")
+            else:
+                buttons.append({"label": label, "callback": f"time_{hour:02d}:00"})
+
         buttons.append({"label": "⬅️ Back", "callback": "go_back"})
         buttons.append({"label": "🔄 Start Over", "callback": "restart_flow"})
-        return buttons
+
+        booked_text = (
+            "\n\n⏳ *Already taken:* " + "  ".join(booked_labels)
+            if booked_labels
+            else ""
+        )
+        return buttons, booked_text
 
     @staticmethod
     def _choice_prompt(header: str, options: list[dict[str, Any]]) -> str:
@@ -481,6 +547,7 @@ class ConversationEngine:
             ConversationStep.CUSTOMER_NAME: "Please provide your name:",
             ConversationStep.SERVICE: "Please choose a service:",
             ConversationStep.EMAIL: "Please provide your email:",
+            ConversationStep.PHONE_NUMBER: "Please share your phone number (at least 10 digits):",
             ConversationStep.CONFIRMATION: "Please confirm your booking:",
         }
         reminder = step_reminders.get(current_step, "Please continue with your booking:")

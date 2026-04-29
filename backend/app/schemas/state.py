@@ -19,6 +19,7 @@ class ConversationSlots(BaseModel):
     appointment_date: date | None = None
     appointment_time: time | None = None
     email: str | None = None
+    phone_number: str | None = None
 
 
 class ConversationState(BaseModel):

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from app.core.enums import ChannelType
 from app.schemas.state import ConversationState
@@ -25,6 +25,20 @@ class OutboundInstruction(BaseModel):
     media_urls: list[str] = Field(default_factory=list)
     # Inline keyboard buttons for Telegram (list of label/callback pairs)
     buttons: list[dict[str, str]] = Field(default_factory=list)  # [{"label": "English", "callback": "lang_english"}]
+
+    @field_validator("buttons", mode="before")
+    @classmethod
+    def normalize_button_payload(cls, value: Any) -> Any:
+        # _build_date_buttons/_build_time_buttons return (buttons, booked_text).
+        # If a caller accidentally passes that whole tuple, keep only buttons.
+        if (
+            isinstance(value, tuple)
+            and len(value) == 2
+            and isinstance(value[0], list)
+            and isinstance(value[1], str)
+        ):
+            return value[0]
+        return value
 
 
 class FlowResult(BaseModel):

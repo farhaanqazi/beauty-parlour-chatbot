@@ -99,6 +99,7 @@ async def get_customer(
         "salon_id": str(customer.salon_id),
         "display_name": customer.display_name,
         "phone_number": customer.phone_number,
+        "email": customer.email,
         "telegram_chat_id": customer.telegram_chat_id,
         "channel": customer.channel.value if hasattr(customer.channel, 'value') else str(customer.channel),
         "preferred_language": customer.preferred_language,
@@ -227,6 +228,7 @@ async def list_customers(
                 "id": str(cust.id),
                 "display_name": cust.display_name,
                 "phone_number": cust.phone_number,
+                "email": cust.email,
                 "channel": cust.channel.value if hasattr(cust.channel, 'value') else str(cust.channel),
                 "created_at": cust.created_at.isoformat() if cust.created_at else None,
             }

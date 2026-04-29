@@ -18,6 +18,23 @@ if TYPE_CHECKING:
     from app.flows.engine import ConversationEngine
 
 
+def _language_buttons(flow_config: dict[str, Any]) -> list[dict[str, str]]:
+    buttons = [
+        {"label": lang["label"], "callback": f"lang_{lang['id']}"}
+        for lang in flow_config["languages"]
+    ]
+    buttons.append({"label": "\U0001f504 Start Over", "callback": "restart_flow"})
+    return buttons
+
+
+def _main_menu_buttons() -> list[dict[str, str]]:
+    return [
+        {"label": "\U0001f4c5 Book", "callback": "action_book_new"},
+        {"label": "\U0001f50d My Bookings", "callback": "action_manage_existing"},
+        {"label": "\U0001f504 Start Over", "callback": "restart_flow"},
+    ]
+
+
 async def handle_booking(
     engine: "ConversationEngine",
     state: ConversationState,
@@ -35,6 +52,26 @@ async def handle_booking(
     """
 
     if state.step == ConversationStep.GREETING:
+        if state.slots.language and cleaned_text == "action_book_new":
+            state.intent = UserIntent.NEW_BOOKING
+            engine._advance_step(state, ConversationStep.CUSTOMER_NAME)
+            return FlowResult(
+                state=state,
+                messages=[
+                    OutboundInstruction(text="First, may I have your name?"),
+                ],
+            ), state_was_reset
+
+        if state.slots.language and cleaned_text == "action_manage_existing":
+            state.intent = UserIntent.MANAGE_BOOKING
+            engine._advance_step(state, ConversationStep.MANAGE_APPOINTMENT_MENU)
+            return FlowResult(
+                state=state,
+                messages=[
+                    OutboundInstruction(text="__LOOKUP_APPOINTMENTS__"),
+                ],
+            ), state_was_reset
+
         # STRICT MODE: If we are waiting for an explicit greeting (after a reset/error),
         # reject other inputs. Otherwise (fresh session), accept anything.
         if state.awaiting_greeting:
@@ -43,21 +80,17 @@ async def handle_booking(
                     state=state,
                     messages=[OutboundInstruction(text="Please type 'Hi' to begin.")],
                 ), state_was_reset
-            # Got the greeting, clear the flag and show main menu
+            # Got the greeting, clear the flag and show language options
             state.awaiting_greeting = False
 
-        engine._advance_step(state, ConversationStep.MAIN_MENU)
+        engine._advance_step(state, ConversationStep.LANGUAGE)
         greeting_text = flow_config["greeting"].format(salon_name=salon.name)
         return FlowResult(
             state=state,
             messages=[
                 OutboundInstruction(
-                    text=f"{greeting_text}\n\nWhat would you like to do?",
-                    buttons=[
-                        {"label": "\U0001f4c5 Book", "callback": "action_book_new"},
-                        {"label": "\U0001f50d My Bookings", "callback": "action_manage_existing"},
-                        {"label": "\U0001f504 Start Over", "callback": "restart_flow"},
-                    ],
+                    text=f"{greeting_text}\n\nChoose your language:",
+                    buttons=_language_buttons(flow_config),
                 ),
             ],
         ), state_was_reset
@@ -66,39 +99,21 @@ async def handle_booking(
         # Route based on user's choice
         if cleaned_text == "action_book_new":
             state.intent = UserIntent.NEW_BOOKING
-            engine._advance_step(state, ConversationStep.LANGUAGE)
-            language_prompt = "Choose your language:"
-            lang_buttons = [
-                {"label": lang["label"], "callback": f"lang_{lang['id']}"}
-                for lang in flow_config["languages"]
-            ]
-            lang_buttons.append({"label": "\U0001f504 Start Over", "callback": "restart_flow"})
+            engine._advance_step(state, ConversationStep.CUSTOMER_NAME)
             return FlowResult(
                 state=state,
                 messages=[
-                    OutboundInstruction(
-                        text=language_prompt,
-                        buttons=lang_buttons,
-                    ),
+                    OutboundInstruction(text="First, may I have your name?"),
                 ],
             ), state_was_reset
 
         elif cleaned_text == "action_manage_existing":
             state.intent = UserIntent.MANAGE_BOOKING
-            engine._advance_step(state, ConversationStep.LANGUAGE)
-            language_prompt = "Choose your language:"
-            lang_buttons = [
-                {"label": lang["label"], "callback": f"lang_{lang['id']}"}
-                for lang in flow_config["languages"]
-            ]
-            lang_buttons.append({"label": "\U0001f504 Start Over", "callback": "restart_flow"})
+            engine._advance_step(state, ConversationStep.MANAGE_APPOINTMENT_MENU)
             return FlowResult(
                 state=state,
                 messages=[
-                    OutboundInstruction(
-                        text=language_prompt,
-                        buttons=lang_buttons,
-                    ),
+                    OutboundInstruction(text="__LOOKUP_APPOINTMENTS__"),
                 ],
             ), state_was_reset
 
@@ -109,10 +124,7 @@ async def handle_booking(
                 messages=[
                     OutboundInstruction(
                         text="Please choose an option:",
-                        buttons=[
-                            {"label": "\U0001f4c5 Book", "callback": "action_book_new"},
-                            {"label": "\U0001f50d My Bookings", "callback": "action_manage_existing"},
-                        ],
+                        buttons=_main_menu_buttons(),
                     ),
                 ],
             ), state_was_reset
@@ -125,31 +137,41 @@ async def handle_booking(
             language_hint=None,
         )
         if not language:
-            lang_buttons = [
-                {"label": lang["label"], "callback": f"lang_{lang['id']}"}
-                for lang in flow_config["languages"]
-            ]
-            lang_buttons.append({"label": "\U0001f504 Start Over", "callback": "restart_flow"})
-            result, _ = engine._invalid_reply(state, "Please choose a valid language:", buttons=lang_buttons)
+            result, _ = engine._invalid_reply(
+                state,
+                "Please choose a valid language:",
+                buttons=_language_buttons(flow_config),
+            )
             return result, state_was_reset
-        # Acknowledge language choice, then move to next step based on intent
+
         state.slots.language = language["id"]
-        
-        if state.intent == UserIntent.MANAGE_BOOKING:
-            engine._advance_step(state, ConversationStep.MANAGE_APPOINTMENT_MENU)
+        if state.previous_step == ConversationStep.MAIN_MENU:
+            if state.intent == UserIntent.MANAGE_BOOKING:
+                engine._advance_step(state, ConversationStep.MANAGE_APPOINTMENT_MENU)
+                return FlowResult(
+                    state=state,
+                    messages=[
+                        OutboundInstruction(text="__LOOKUP_APPOINTMENTS__"),
+                    ],
+                ), state_was_reset
+
+            engine._advance_step(state, ConversationStep.CUSTOMER_NAME)
             return FlowResult(
                 state=state,
                 messages=[
-                    OutboundInstruction(text="__LOOKUP_APPOINTMENTS__"),
+                    OutboundInstruction(
+                        text=f"Great! I'll continue in {language['label']}.\n\nFirst, may I have your name?"
+                    )
                 ],
             ), state_was_reset
-            
-        engine._advance_step(state, ConversationStep.CUSTOMER_NAME)
+
+        engine._advance_step(state, ConversationStep.MAIN_MENU)
         return FlowResult(
             state=state,
             messages=[
                 OutboundInstruction(
-                    text=f"Great! I'll continue in {language['label']}.\n\nFirst, may I have your name?"
+                    text=f"Great! I'll continue in {language['label']}.\n\nWhat would you like to do?",
+                    buttons=_main_menu_buttons(),
                 )
             ],
         ), state_was_reset
@@ -194,12 +216,12 @@ async def handle_booking(
         state.slots.service_name = service.name
         # Skip sample images, go directly to date selection with quick date buttons
         engine._advance_step(state, ConversationStep.APPOINTMENT_DATE)
-        date_buttons = engine._build_date_buttons(salon.timezone, include_back=True)
+        date_buttons, booked_text = engine._build_date_buttons(salon.timezone, include_back=True)
         return FlowResult(
             state=state,
             messages=[
                 OutboundInstruction(
-                    text="Please choose your preferred appointment date:\n\U0001f4a1 Or type your preferred date (e.g. next Friday, 25/04/2026)",
+                    text="Please choose your preferred appointment date:\n\U0001f4a1 Or type your preferred date (e.g. next Friday, 25/04/2026)" + booked_text,
                     buttons=date_buttons,
                 )
             ],
@@ -246,6 +268,17 @@ async def handle_booking(
                 messages=[OutboundInstruction(
                     text="No problem! Please provide your correct email address:",
                     buttons=[{"label": "⏭️ Skip", "callback": "action_skip_email"}],
+                )],
+            ), state_was_reset
+        elif cleaned_text == "change_phone":
+            # Go back to phone number step
+            state.step = ConversationStep.PHONE_NUMBER
+            state.previous_step = ConversationStep.CONFIRMATION
+            return FlowResult(
+                state=state,
+                messages=[OutboundInstruction(
+                    text="Please enter the correct phone number (at least 10 digits):",
+                    buttons=[{"label": "⏭️ Skip", "callback": "action_skip_phone"}],
                 )],
             ), state_was_reset
         else:

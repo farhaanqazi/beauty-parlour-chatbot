@@ -42,6 +42,7 @@ class Appointment(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     final_price: Mapped[float | None] = mapped_column(Numeric(10, 2), nullable=True)
     booking_payload: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
+    idempotency_key: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
     customer = relationship("Customer", back_populates="appointments")
     service = relationship("SalonService")

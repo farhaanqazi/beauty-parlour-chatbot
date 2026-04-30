@@ -71,11 +71,11 @@ def create_db_engine(settings: Settings):
     # Create SSL context based on sslmode
     ssl_context = None
     if ssl_mode in ("require", "verify-full", "verify-ca"):
-        # For Supabase: Use SSL encryption without full cert chain verification
-        # This is the standard approach documented by Supabase
         ssl_context = ssl.create_default_context(cafile=certifi.where())
+        # Hostname check stays off for Supabase pooler URLs whose cert SANs
+        # may not match the connection host; chain verification is on.
         ssl_context.check_hostname = False
-        ssl_context.verify_mode = ssl.CERT_NONE
+        ssl_context.verify_mode = ssl.CERT_REQUIRED
 
     connect_args = {}
     if ssl_context:

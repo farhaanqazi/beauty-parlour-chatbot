@@ -4,7 +4,7 @@ import warnings
 from functools import lru_cache
 from typing import Optional
 
-from pydantic import AliasChoices, Field, field_validator
+from pydantic import AliasChoices, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -146,6 +146,28 @@ class Settings(BaseSettings):
             )
             return None
         return v
+
+    @model_validator(mode="after")
+    def fail_fast_on_production_placeholders(self) -> "Settings":
+        if self.environment.strip().lower() != "production":
+            return self
+
+        offenders: list[str] = []
+        if "YOUR_" in self.database_url.upper() or "PLACEHOLDER" in self.database_url.upper():
+            offenders.append("DATABASE_URL")
+        if "placeholder" in self.supabase_url.lower():
+            offenders.append("SUPABASE_URL")
+        if "your-" in self.supabase_service_role_key.lower():
+            offenders.append("SUPABASE_SERVICE_ROLE_KEY")
+        if "your-" in self.supabase_jwt_secret.lower():
+            offenders.append("SUPABASE_JWT_SECRET")
+
+        if offenders:
+            raise ValueError(
+                "ENVIRONMENT=production but placeholder values are still set for: "
+                f"{', '.join(offenders)}. Update .env with real values before starting."
+            )
+        return self
 
     @property
     def llm_api_key(self) -> Optional[str]:

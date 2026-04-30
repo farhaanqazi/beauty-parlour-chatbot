@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 from datetime import date, datetime, time, timedelta
 from typing import TYPE_CHECKING
 from uuid import UUID, uuid4
@@ -43,15 +44,85 @@ class AppointmentService:
         state: ConversationState,
     ) -> Appointment:
         """
-        Create an appointment with proper transaction handling.
+        Create an appointment with idempotency and proper transaction handling.
 
-        Uses a nested transaction (savepoint) to isolate validation failures.
-        If any step fails, only the inner transaction rolls back — the outer
-        session stays clean so the caller can continue gracefully.
+        Idempotency key is derived from (salon, customer, service, date, time)
+        so a customer double-tapping the WhatsApp confirm button collapses to
+        a single appointment instead of producing a duplicate or the ugly
+        "time slot already booked" error. Two layers:
+          1. Fast path — SELECT by (salon_id, idempotency_key) before the
+             transaction; return existing if found.
+          2. Race-safe path — wrap the nested transaction in try/except for
+             IntegrityError on uq_appointment_idempotency; if a concurrent
+             writer won, fetch and return their row.
         """
         if not state.slots.service_id or not state.slots.appointment_date or not state.slots.appointment_time:
             raise ValueError("Conversation state is missing appointment details.")
 
+        idempotency_key = self._compute_idempotency_key(salon, customer, state)
+
+        existing = await self._find_by_idempotency_key(salon.id, idempotency_key)
+        if existing is not None:
+            app_logger.info(
+                "Idempotent booking returned existing appointment",
+                event="appointment_idempotent_hit",
+                booking_reference=existing.booking_reference,
+                salon_id=str(salon.id),
+                customer_id=str(customer.id),
+            )
+            return existing
+
+        try:
+            return await self._create_appointment_atomic(salon, customer, state, idempotency_key)
+        except IntegrityError as e:
+            if "uq_appointment_idempotency" not in str(e.orig):
+                raise
+            existing = await self._find_by_idempotency_key(salon.id, idempotency_key)
+            if existing is None:
+                raise
+            app_logger.info(
+                "Idempotent booking resolved race via concurrent insert",
+                event="appointment_idempotent_race",
+                booking_reference=existing.booking_reference,
+                salon_id=str(salon.id),
+                customer_id=str(customer.id),
+            )
+            return existing
+
+    @staticmethod
+    def _compute_idempotency_key(
+        salon: Salon, customer: Customer, state: ConversationState
+    ) -> str:
+        raw = "|".join([
+            str(salon.id),
+            str(customer.id),
+            str(state.slots.service_id),
+            state.slots.appointment_date.isoformat(),
+            state.slots.appointment_time.isoformat(),
+        ])
+        return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+    async def _find_by_idempotency_key(
+        self, salon_id: UUID, idempotency_key: str
+    ) -> Appointment | None:
+        stmt = (
+            select(Appointment)
+            .where(
+                Appointment.salon_id == salon_id,
+                Appointment.idempotency_key == idempotency_key,
+            )
+            .limit(1)
+        )
+        result = await self.db.execute(stmt)
+        return result.scalar_one_or_none()
+
+    async def _create_appointment_atomic(
+        self,
+        salon: Salon,
+        customer: Customer,
+        state: ConversationState,
+        idempotency_key: str,
+    ) -> Appointment:
         with app_logger.track_operation(
             "create_appointment",
             salon_id=str(salon.id),
@@ -123,6 +194,7 @@ class AppointmentService:
                     appointment_at=appointment_at,
                     final_price=service.price,
                     booking_payload=state.model_dump(mode="json"),
+                    idempotency_key=idempotency_key,
                 )
                 self.db.add(appointment)
                 await self.db.flush()

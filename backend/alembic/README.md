@@ -8,7 +8,8 @@ the canonical record of how the baseline schema was built.
 ## Where the schema currently lives
 
 - `backend/sql/schema.sql` — comprehensive idempotent baseline
-- `backend/sql/migration_v2.sql` … `migration_v5_morning_reminder.sql` — incremental patches applied on top of v2
+- `backend/sql/migration_v2.sql` — incremental patch on top of schema.sql; still applied by the legacy `run_migration.py` shim during fresh-local-Postgres bootstrap
+- `backend/sql/legacy/migration_v3.sql`, `migration_v4_auto_complete.sql`, `migration_v5_morning_reminder.sql` — historical patches already applied to all live environments; kept for reference only
 - `backend/sql/rollback_v2.sql` — manual rollback
 - `backend/sql/seed_demo.sql` — demo data
 
@@ -89,4 +90,4 @@ alembic history --verbose
 
 - `schema.sql` stays as the canonical bootstrap for fresh databases.
 - New schema changes go through Alembic, **not** new `migration_vN.sql` files.
-- Once Alembic has captured everything in real revisions, `migration_v3..v5.sql` can be archived to `backend/sql/legacy/`.
+- The v3-v5 patches have been archived to `backend/sql/legacy/`. They are not re-applied by Alembic; their effects are already part of the live schema.

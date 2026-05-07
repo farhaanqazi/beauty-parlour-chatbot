@@ -25,6 +25,70 @@ if TYPE_CHECKING:
     from app.flows.engine import ConversationEngine
 
 
+def _advance_after_contact(
+    engine: "ConversationEngine",
+    state: ConversationState,
+    services: Sequence[SalonService],
+    came_from_update: bool,
+    *,
+    flow_config: dict[str, Any],
+) -> FlowResult:
+    """Advance the flow after EMAIL or PHONE_NUMBER has been collected (or skipped).
+
+    Three exits, in priority order:
+    1. The user clicked "Update phone/email" OR no service has been picked yet
+       (returning customer collecting missing contact before booking starts):
+       jump to SERVICE selection.
+    2. Phone is still missing: ask for phone next.
+    3. Everything we need is in slots: render CONFIRMATION.
+
+    Without this, contact-collection that runs *before* service/date/time
+    selection crashes the CONFIRMATION render with a None appointment_date.
+    """
+    needs_service_pick = came_from_update or state.slots.service_id is None
+
+    if needs_service_pick:
+        engine._advance_step(state, ConversationStep.SERVICE)
+        svc_buttons = [{"label": svc.name, "callback": f"svc_{svc.id}"} for svc in services]
+        svc_buttons.append({"label": "\U0001f504 Start Over", "callback": "restart_flow"})
+        prefix = "Updated! " if came_from_update else f"Got it{', ' + state.slots.customer_name if state.slots.customer_name else ''}! "
+        return FlowResult(
+            state=state,
+            messages=[OutboundInstruction(
+                text=f"{prefix}Which service do you need:",
+                buttons=svc_buttons,
+            )],
+        )
+
+    if state.slots.phone_number is None:
+        engine._advance_step(state, ConversationStep.PHONE_NUMBER)
+        return FlowResult(
+            state=state,
+            messages=[OutboundInstruction(
+                text="Please share your phone number so we can reach you about your appointment:",
+                buttons=[{"label": "⏭️ Skip", "callback": "action_skip_phone"}],
+            )],
+        )
+
+    engine._advance_step(state, ConversationStep.CONFIRMATION)
+    return FlowResult(
+        state=state,
+        messages=[OutboundInstruction(
+            text=flow_config["confirmation_template"].format(
+                service=state.slots.service_name,
+                date=state.slots.appointment_date.strftime("%d %b %Y"),
+                time=state.slots.appointment_time.strftime("%I:%M %p"),
+            ),
+            buttons=[
+                {"label": "✅ YES", "callback": "confirm_yes"},
+                {"label": "❌ NO", "callback": "confirm_no"},
+                {"label": "✏️ Change Phone", "callback": "change_phone"},
+                {"label": "\U0001f504 Start Over", "callback": "restart_flow"},
+            ],
+        )],
+    )
+
+
 def _prefer_business_hour_for_ambiguous_time(
     engine: "ConversationEngine",
     salon: Salon,
@@ -648,27 +712,7 @@ async def handle_scheduling(
         # User might have clicked "Skip" button or typed "skip"
         if cleaned_text.lower() in {"skip", "action_skip_email", "skip email"}:
             state.slots.email = None
-            if came_from_update:
-                engine._advance_step(state, ConversationStep.SERVICE)
-                svc_buttons = [{"label": svc.name, "callback": f"svc_{svc.id}"} for svc in services]
-                svc_buttons.append({"label": "\U0001f504 Start Over", "callback": "restart_flow"})
-                return FlowResult(
-                    state=state,
-                    messages=[OutboundInstruction(
-                        text=f"Got it{', ' + state.slots.customer_name if state.slots.customer_name else ''}! Which service do you need:",
-                        buttons=svc_buttons,
-                    )],
-                ), state_was_reset
-            engine._advance_step(state, ConversationStep.PHONE_NUMBER)
-            return FlowResult(
-                state=state,
-                messages=[
-                    OutboundInstruction(
-                        text="Please share your phone number so we can reach you about your appointment:",
-                        buttons=[{"label": "⏭️ Skip", "callback": "action_skip_phone"}],
-                    )
-                ],
-            ), state_was_reset
+            return _advance_after_contact(engine, state, services, came_from_update, flow_config=flow_config), state_was_reset
 
         # Handle email input
         email = cleaned_text.strip()
@@ -685,27 +729,7 @@ async def handle_scheduling(
             return result, state_was_reset
 
         state.slots.email = email
-        if came_from_update:
-            engine._advance_step(state, ConversationStep.SERVICE)
-            svc_buttons = [{"label": svc.name, "callback": f"svc_{svc.id}"} for svc in services]
-            svc_buttons.append({"label": "\U0001f504 Start Over", "callback": "restart_flow"})
-            return FlowResult(
-                state=state,
-                messages=[OutboundInstruction(
-                    text=f"Updated! Which service do you need:",
-                    buttons=svc_buttons,
-                )],
-            ), state_was_reset
-        engine._advance_step(state, ConversationStep.PHONE_NUMBER)
-        return FlowResult(
-            state=state,
-            messages=[
-                OutboundInstruction(
-                    text="Please share your phone number so we can reach you about your appointment:",
-                    buttons=[{"label": "⏭️ Skip", "callback": "action_skip_phone"}],
-                )
-            ],
-        ), state_was_reset
+        return _advance_after_contact(engine, state, services, came_from_update, flow_config=flow_config), state_was_reset
 
     # --- PHONE NUMBER ---
     if state.step == ConversationStep.PHONE_NUMBER:
@@ -714,35 +738,8 @@ async def handle_scheduling(
         # Allow skipping
         if cleaned_text.lower() in {"skip", "action_skip_phone", "skip phone"}:
             state.slots.phone_number = None
-            if came_from_update:
-                engine._advance_step(state, ConversationStep.SERVICE)
-                svc_buttons = [{"label": svc.name, "callback": f"svc_{svc.id}"} for svc in services]
-                svc_buttons.append({"label": "\U0001f504 Start Over", "callback": "restart_flow"})
-                return FlowResult(
-                    state=state,
-                    messages=[OutboundInstruction(
-                        text=f"Got it{', ' + state.slots.customer_name if state.slots.customer_name else ''}! Which service do you need:",
-                        buttons=svc_buttons,
-                    )],
-                ), state_was_reset
-            engine._advance_step(state, ConversationStep.CONFIRMATION)
-            return FlowResult(
-                state=state,
-                messages=[
-                    OutboundInstruction(
-                        text=flow_config["confirmation_template"].format(
-                            service=state.slots.service_name,
-                            date=state.slots.appointment_date.strftime("%d %b %Y"),
-                            time=state.slots.appointment_time.strftime("%I:%M %p"),
-                        ),
-                        buttons=[
-                            {"label": "✅ YES", "callback": "confirm_yes"},
-                            {"label": "❌ NO", "callback": "confirm_no"},
-                            {"label": "✏️ Change Phone", "callback": "change_phone"},
-                            {"label": "🔄 Start Over", "callback": "restart_flow"},
-                        ],
-                    )
-                ],
+            return _advance_after_contact(
+                engine, state, services, came_from_update, flow_config=flow_config
             ), state_was_reset
 
         # Strip everything that is not a digit so users can type +91 98765 43210, etc.
@@ -761,35 +758,8 @@ async def handle_scheduling(
 
         # Store the cleaned digit string (preserve leading country code if present)
         state.slots.phone_number = digits_only
-        if came_from_update:
-            engine._advance_step(state, ConversationStep.SERVICE)
-            svc_buttons = [{"label": svc.name, "callback": f"svc_{svc.id}"} for svc in services]
-            svc_buttons.append({"label": "\U0001f504 Start Over", "callback": "restart_flow"})
-            return FlowResult(
-                state=state,
-                messages=[OutboundInstruction(
-                    text=f"Updated! Which service do you need:",
-                    buttons=svc_buttons,
-                )],
-            ), state_was_reset
-        engine._advance_step(state, ConversationStep.CONFIRMATION)
-        return FlowResult(
-            state=state,
-            messages=[
-                OutboundInstruction(
-                    text=flow_config["confirmation_template"].format(
-                        service=state.slots.service_name,
-                        date=state.slots.appointment_date.strftime("%d %b %Y"),
-                        time=state.slots.appointment_time.strftime("%I:%M %p"),
-                    ),
-                    buttons=[
-                        {"label": "✅ YES", "callback": "confirm_yes"},
-                        {"label": "❌ NO", "callback": "confirm_no"},
-                        {"label": "✏️ Change Phone", "callback": "change_phone"},
-                        {"label": "🔄 Start Over", "callback": "restart_flow"},
-                    ],
-                )
-            ],
+        return _advance_after_contact(
+            engine, state, services, came_from_update, flow_config=flow_config
         ), state_was_reset
 
     return None

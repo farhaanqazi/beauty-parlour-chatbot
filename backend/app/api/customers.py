@@ -4,7 +4,7 @@ from datetime import datetime
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import select, func
+from sqlalchemy import select, func, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_db, get_current_user, AuthenticatedUser
@@ -13,6 +13,81 @@ from app.db.models.appointment import Appointment
 from app.core.enums import AppointmentStatus
 
 router = APIRouter(tags=["customers"])
+
+
+@router.get("/customers/active")
+async def list_active_customers(
+    salon_id: str | None = Query(None),
+    limit: int = Query(default=100, ge=1, le=500),
+    db: AsyncSession = Depends(get_db),
+    current_user: AuthenticatedUser = Depends(get_current_user),
+) -> dict:
+    """
+    List active customers (those with at least one appointment) with lifetime metrics.
+
+    Active = has booked at least once. Mirrors the `unique_customers` KPI count.
+    Metrics are computed via a single GROUP BY for performance.
+    Tenant-isolated: non-admin users always scoped to their own salon.
+    """
+    # Tenant scoping
+    if current_user.role != 'admin':
+        effective_salon_id = current_user.salon_id
+    else:
+        effective_salon_id = salon_id
+
+    salon_filter = ""
+    params: dict = {"limit": limit}
+    if effective_salon_id:
+        salon_filter = "AND c.salon_id = :salon_id"
+        params["salon_id"] = effective_salon_id
+
+    query = text(f"""
+        SELECT
+            c.id,
+            c.display_name,
+            c.phone_number,
+            c.email,
+            c.channel,
+            c.created_at,
+            COUNT(a.id) FILTER (
+                WHERE a.status IN ('completed', 'confirmed', 'pending')
+            ) AS total_visits,
+            COALESCE(SUM(a.final_price) FILTER (
+                WHERE a.status = 'completed'
+            ), 0) AS total_spent,
+            MAX(a.appointment_at) FILTER (
+                WHERE a.status = 'completed'
+            ) AS last_visit
+        FROM customers c
+        INNER JOIN appointments a ON a.customer_id = c.id
+        WHERE 1=1
+          {salon_filter}
+        GROUP BY c.id
+        HAVING COUNT(a.id) > 0
+        ORDER BY MAX(a.appointment_at) DESC NULLS LAST
+        LIMIT :limit
+    """)
+
+    result = await db.execute(query, params)
+    rows = result.fetchall()
+
+    return {
+        "data": [
+            {
+                "id": str(row.id),
+                "display_name": row.display_name,
+                "phone_number": row.phone_number,
+                "email": row.email,
+                "channel": row.channel.value if hasattr(row.channel, 'value') else str(row.channel),
+                "created_at": row.created_at.isoformat() if row.created_at else None,
+                "total_visits": int(row.total_visits or 0),
+                "total_spent": float(row.total_spent or 0),
+                "last_visit": row.last_visit.isoformat() if row.last_visit else None,
+            }
+            for row in rows
+        ],
+        "total": len(rows),
+    }
 
 
 @router.get("/customers/{customer_id}")

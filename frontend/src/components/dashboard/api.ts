@@ -1,5 +1,9 @@
 import apiClient from '../../services/apiClient';
-import type { KPIData, RevenueTrendResponse } from './types';
+import type {
+  ActiveCustomersResponse,
+  KPIData,
+  RevenueTrendResponse,
+} from './types';
 
 export const dashboardKeys = {
   kpis: ['kpis'] as const,
@@ -9,6 +13,8 @@ export const dashboardKeys = {
     ['analytics-week', offset, salonId] as const,
   analyticsWeekPrior: (offset: number, salonId?: string) =>
     ['analytics-week', 'prior', offset, salonId] as const,
+  activeCustomers: (salonId?: string) =>
+    ['active-customers', salonId] as const,
 };
 
 export const fetchKPIs = async (): Promise<KPIData> => {
@@ -23,6 +29,16 @@ export const fetchTrend = async (
   const { data } = await apiClient.get<RevenueTrendResponse>(
     '/api/v1/analytics/revenue/trends',
     { params: { start_date: start, end_date: end } },
+  );
+  return data;
+};
+
+export const fetchActiveCustomers = async (
+  salonId?: string,
+): Promise<ActiveCustomersResponse> => {
+  const { data } = await apiClient.get<ActiveCustomersResponse>(
+    '/api/v1/customers/active',
+    { params: salonId ? { salon_id: salonId } : {} },
   );
   return data;
 };

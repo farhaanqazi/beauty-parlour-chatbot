@@ -35,3 +35,20 @@ export interface DailyTrendPoint {
 export interface RevenueTrendResponse {
   data: DailyTrendPoint[];
 }
+
+export interface ActiveCustomer {
+  id: string;
+  display_name: string | null;
+  phone_number: string | null;
+  email: string | null;
+  channel: string;
+  created_at: string | null;
+  total_visits: number;
+  total_spent: number;
+  last_visit: string | null;
+}
+
+export interface ActiveCustomersResponse {
+  data: ActiveCustomer[];
+  total: number;
+}

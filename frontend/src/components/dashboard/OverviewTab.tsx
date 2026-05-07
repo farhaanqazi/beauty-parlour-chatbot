@@ -42,6 +42,8 @@ interface Props {
   todayAppointments: DashboardAppointment[] | undefined;
   appointmentsLoading: boolean;
   onShowRevenueOverview: () => void;
+  onShowCustomers: () => void;
+  onShowBookings: () => void;
   onJumpToAnalytics: () => void;
   onJumpToAppointments: () => void;
   onOpenAppointment: (apt: AppointmentDrawerPayload) => void;
@@ -58,6 +60,8 @@ const OverviewTab = ({
   todayAppointments,
   appointmentsLoading,
   onShowRevenueOverview,
+  onShowCustomers,
+  onShowBookings,
   onJumpToAnalytics,
   onJumpToAppointments,
   onOpenAppointment,
@@ -126,6 +130,10 @@ const OverviewTab = ({
                 onClick={
                   kpi.label === 'Revenue Overview'
                     ? onShowRevenueOverview
+                    : kpi.label === 'Active Customers'
+                    ? onShowCustomers
+                    : kpi.label === 'Total Bookings'
+                    ? onShowBookings
                     : kpi.label === 'Revenue Trend' || kpi.label.startsWith('Analytics')
                     ? onJumpToAnalytics
                     : () => console.log(`${kpi.label} clicked`)

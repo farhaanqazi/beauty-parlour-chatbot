@@ -19,6 +19,8 @@ import { useTodayAppointments } from '../hooks/useDashboardData';
 import AppointmentDrawer from '../components/appointments/AppointmentDrawer';
 import RevenueOverviewModal from '../components/dashboard/RevenueOverviewModal';
 import AnalyticsWeeklyDrawer from '../components/dashboard/AnalyticsWeeklyDrawer';
+import CustomersDrawer from '../components/dashboard/CustomersDrawer';
+import BookingsDrawer from '../components/dashboard/BookingsDrawer';
 import { useSalonKpis } from '../components/dashboard/hooks/useSalonKpis';
 import { useWeeklyBookings } from '../components/dashboard/hooks/useWeeklyBookings';
 import { useSelectedWeek } from '../components/dashboard/hooks/useSelectedWeek';
@@ -37,6 +39,8 @@ export default function SalonOwnerDashboard() {
   );
   const [showRevenueOverview, setShowRevenueOverview] = useState(false);
   const [showAnalyticsDrawer, setShowAnalyticsDrawer] = useState(false);
+  const [showCustomersDrawer, setShowCustomersDrawer] = useState(false);
+  const [showBookingsDrawer, setShowBookingsDrawer] = useState(false);
   const [selectedAppointment, setSelectedAppointment] = useState<any>(null);
 
   const weeklySalonId = user?.salon_id || undefined;
@@ -123,6 +127,8 @@ export default function SalonOwnerDashboard() {
             todayAppointments={todayAppointments}
             appointmentsLoading={appointmentsLoading}
             onShowRevenueOverview={() => setShowRevenueOverview(true)}
+            onShowCustomers={() => setShowCustomersDrawer(true)}
+            onShowBookings={() => setShowBookingsDrawer(true)}
             onJumpToAnalytics={() => setSelectedTab('analytics')}
             onJumpToAppointments={() => setSelectedTab('appointments')}
             onOpenAppointment={setSelectedAppointment}
@@ -185,6 +191,18 @@ export default function SalonOwnerDashboard() {
         delta={weeklyAnalytics.delta}
         trend={weeklyAnalytics.trend}
         onOpenFullAnalytics={() => setSelectedTab('analytics')}
+      />
+
+      <CustomersDrawer
+        isOpen={showCustomersDrawer}
+        onClose={() => setShowCustomersDrawer(false)}
+        salonId={weeklySalonId}
+      />
+
+      <BookingsDrawer
+        isOpen={showBookingsDrawer}
+        onClose={() => setShowBookingsDrawer(false)}
+        salonId={weeklySalonId}
       />
 
       <AppointmentDrawer

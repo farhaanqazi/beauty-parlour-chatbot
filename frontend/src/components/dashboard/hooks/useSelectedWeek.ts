@@ -76,7 +76,7 @@ export const useSelectedWeek = ({
       return {
         priorRev,
         delta: thisRev,
-        pct: undefined,
+        pct: thisRev > 0 ? 100 : undefined,
         trend: thisRev > 0 ? 'up' : undefined,
       };
     }

@@ -11,368 +11,19 @@
  */
 
 import { useState } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
+import { motion } from 'framer-motion';
 import { useNavigate } from 'react-router-dom';
-import {
-  TrendingUp,
-  Calendar,
-  Users,
-  Zap,
-  ArrowUpRight,
-  ArrowDownRight,
-  MoreVertical,
-  Plus,
-  Settings,
-  BarChart3,
-  X,
-  Loader2,
-  FileText,
-} from 'lucide-react';
+import { Calendar } from 'lucide-react';
 import { useAuthStore } from '../store/authStore';
-import { useQuery } from '@tanstack/react-query';
-import apiClient from '../services/apiClient';
 import { useTodayAppointments } from '../hooks/useDashboardData';
 import AppointmentDrawer from '../components/appointments/AppointmentDrawer';
-
-// ============================================================
-// TYPES
-// ============================================================
-
-interface KPICard {
-  label: string;
-  value: string | number;
-  change?: number;
-  trend?: 'up' | 'down';
-  icon: React.ReactNode;
-  color: 'accent' | 'success' | 'info' | 'warning';
-  action?: React.ReactNode; // For buttons next to KPI
-}
-
-interface Appointment {
-  id: string;
-  customer_name: string;
-  service_name: string;
-  appointment_at: string;
-  status: string;
-  staff_name: string | null;
-}
-
-interface RevenueByService {
-  service: string;
-  count: number;
-  revenue: number;
-}
-
-interface KPIData {
-  total_revenue: number;
-  total_appointments: number;
-  todays_appointments: number;
-  unique_customers: number;
-  revenue_by_service: RevenueByService[];
-}
-
-// ============================================================
-// API FETCH FUNCTIONS
-// ============================================================
-
-const fetchKPIs = async (): Promise<KPIData> => {
-  const { data } = await apiClient.get('/api/v1/analytics/kpis');
-  return data;
-};
-
-// ============================================================
-// REVENUE OVERVIEW MODAL
-// ============================================================
-
-const RevenueOverviewModal = ({
-  isOpen,
-  onClose,
-  revenueByService,
-  totalRevenue,
-}: {
-  isOpen: boolean;
-  onClose: () => void;
-  revenueByService: RevenueByService[];
-  totalRevenue: number;
-}) => {
-  if (!isOpen) return null;
-
-  return (
-    <AnimatePresence>
-      {isOpen && (
-        <motion.div
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          exit={{ opacity: 0 }}
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4"
-          onClick={onClose}
-        >
-          <motion.div
-            initial={{ scale: 0.95, opacity: 0 }}
-            animate={{ scale: 1, opacity: 1 }}
-            exit={{ scale: 0.95, opacity: 0 }}
-            transition={{ duration: 0.2 }}
-            className="bg-[var(--color-surface-raised)] border border-[var(--color-neutral-700)] rounded-3xl max-w-2xl w-full max-h-[80vh] flex flex-col overflow-hidden shadow-2xl"
-            onClick={(e) => e.stopPropagation()}
-          >
-            {/* Header */}
-            <div className="flex items-center justify-between p-6 border-b border-[var(--color-neutral-700)]">
-              <div>
-                <h2 className="text-2xl font-bold text-[var(--color-neutral-100)]">
-                  Revenue Overview
-                </h2>
-                <p className="text-[var(--color-neutral-400)] text-sm mt-1">
-                  Revenue breakdown by service (all bookings)
-                </p>
-              </div>
-              <button
-                onClick={onClose}
-                className="p-2 rounded-xl hover:bg-[var(--color-surface-overlay)] transition-colors"
-                aria-label="Close"
-              >
-                <X className="w-5 h-5 text-[var(--color-neutral-400)]" />
-              </button>
-            </div>
-
-            {/* Total Revenue Card */}
-            <div className="p-6 bg-gradient-to-br from-[var(--color-accent)]/20 to-transparent border-b border-[var(--color-neutral-700)]">
-              <p className="text-[var(--color-neutral-400)] text-sm font-medium mb-2">
-                Total Revenue (All Bookings)
-              </p>
-              <p className="text-4xl font-bold text-[var(--color-accent)]">
-                ₹{totalRevenue.toLocaleString('en-IN')}
-              </p>
-            </div>
-
-            {/* Revenue by Service List - All Services */}
-            <div className="flex flex-col flex-1 min-h-0">
-              <h3 className="text-sm font-semibold text-[var(--color-neutral-400)] uppercase tracking-wide px-6 pt-6 pb-4">
-                All Services by Revenue
-              </h3>
-              <div className="flex-1 overflow-y-auto px-6 pb-6 space-y-3 min-h-0">
-                {/* Filter out zero-revenue services, but show ALL that have revenue */}
-                {revenueByService
-                  .filter(item => item.revenue > 0)
-                  .length === 0 ? (
-                  <p className="text-[var(--color-neutral-500)] text-center py-8">
-                    No revenue data available yet.
-                  </p>
-                ) : (
-                  revenueByService
-                    .filter(item => item.revenue > 0) // Show ALL, not just top 5
-                    .map((item, index) => {
-                      const percentage = totalRevenue > 0
-                        ? ((item.revenue / totalRevenue) * 100).toFixed(1)
-                        : '0';
-                      return (
-                        <motion.div
-                          key={item.service}
-                          initial={{ opacity: 0, x: -20 }}
-                          animate={{ opacity: 1, x: 0 }}
-                          transition={{ delay: index * 0.05 }}
-                          className="flex items-center justify-between p-4 rounded-xl bg-[var(--color-surface-base)] border border-[var(--color-neutral-700)] hover:border-[var(--color-accent)]/30 transition-colors"
-                        >
-                          <div className="flex items-center gap-4">
-                            <div className="w-10 h-10 rounded-lg bg-[var(--color-accent)]/20 flex items-center justify-center text-[var(--color-accent)] font-bold text-sm">
-                              {index + 1}
-                            </div>
-                            <div>
-                              <p className="text-[var(--color-neutral-100)] font-semibold">
-                                {item.service}
-                              </p>
-                              <p className="text-[var(--color-neutral-500)] text-sm">
-                                {item.count} booking{item.count !== 1 ? 's' : ''}
-                              </p>
-                            </div>
-                          </div>
-                          <div className="text-right">
-                            <p className="text-[var(--color-neutral-100)] font-bold">
-                              ₹{item.revenue.toLocaleString('en-IN')}
-                            </p>
-                            <p className="text-[var(--color-success)] text-sm">
-                              {percentage}%
-                            </p>
-                          </div>
-                        </motion.div>
-                      );
-                    })
-                )}
-              </div>
-            </div>
-          </motion.div>
-        </motion.div>
-      )}
-    </AnimatePresence>
-  );
-};
-
-// ============================================================
-// COMPONENTS
-// ============================================================
-
-/**
- * KPI CARD
- * UI/UX Pro Max - Priority 2 (Touch): Tap targets 48px + 8px gaps
- * Priority 6 (Typography): Semantic color tokens
- */
-const KPICard = ({ data, onClick }: { data: KPICard; onClick?: () => void }) => {
-  const colorMap = {
-    accent: 'from-[var(--color-accent)]/20 to-transparent border-[var(--color-accent)]/30 text-[var(--color-accent)]',
-    success: 'from-[var(--color-success)]/20 to-transparent border-[var(--color-success)]/30 text-[var(--color-success)]',
-    info: 'from-[var(--color-info)]/20 to-transparent border-[var(--color-info)]/30 text-[var(--color-info)]',
-    warning: 'from-[var(--color-warning)]/20 to-transparent border-[var(--color-warning)]/30 text-[var(--color-warning)]',
-  };
-
-  return (
-    <motion.button
-      onClick={onClick}
-      whileHover={{ scale: 1.03 }}
-      whileTap={{ scale: 0.97 }}
-      initial={{ opacity: 0, y: 20 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.3, ease: [0.25, 0.46, 0.45, 0.94] }}
-      className={`relative w-full h-full flex flex-col justify-between bg-gradient-to-br ${colorMap[data.color]} border rounded-2xl p-6 backdrop-blur-sm hover:shadow-lg focus:outline-none focus:ring-2 focus:ring-[var(--color-accent)]/50 cursor-pointer overflow-visible`}
-    >
-      {/* Header: Icon + Label */}
-      <div className="flex items-start justify-between mb-4">
-        <div className="flex items-center gap-2">
-          <div className="p-2 rounded-lg bg-[var(--color-surface-overlay)]">
-            {data.icon}
-          </div>
-        </div>
-        <button
-          className="p-2 text-[var(--color-neutral-400)] hover:text-[var(--color-neutral-200)] hover:bg-[var(--color-surface-overlay)] rounded-lg transition-colors duration-150"
-          aria-label="More options"
-          onClick={(e) => e.stopPropagation()}
-        >
-          <MoreVertical className="w-4 h-4" />
-        </button>
-      </div>
-
-      <p className="text-[var(--color-neutral-300)] text-base font-semibold mb-1">
-        {data.label}
-      </p>
-
-      {/* Value */}
-      <div className="flex items-center gap-2 mb-3">
-        <h3 className="text-2xl font-bold text-[var(--color-neutral-100)]">
-          {data.value}
-        </h3>
-      </div>
-
-      {/* Trend Indicator (optional) */}
-      {data.trend !== undefined && data.change !== undefined && (
-        <div className="flex items-center gap-2 text-sm">
-          {data.trend === 'up' ? (
-            <>
-              <ArrowUpRight className="w-4 h-4 text-[var(--color-success)]" />
-              <span className="text-[var(--color-success)]">+{data.change}%</span>
-            </>
-          ) : (
-            <>
-              <ArrowDownRight className="w-4 h-4 text-[var(--color-danger)]" />
-              <span className="text-[var(--color-danger)]">-{Math.abs(data.change)}%</span>
-            </>
-          )}
-          <span className="text-[var(--color-neutral-500)]">from last month</span>
-        </div>
-      )}
-    </motion.button>
-  );
-};
-
-/**
- * APPOINTMENT ROW
- * UI/UX Pro Max - Priority 2: Min 44px height for touch
- */
-const AppointmentRow = ({ appointment, onClick }: { appointment: Appointment; onClick?: () => void }) => {
-  const statusColorMap: Record<string, string> = {
-    pending: 'bg-[var(--color-warning)]/20 text-[var(--color-warning)] border-[var(--color-warning)]/20',
-    confirmed: 'bg-[var(--color-success)]/20 text-[var(--color-success)] border-[var(--color-success)]/20',
-    completed: 'bg-[var(--color-info)]/20 text-[var(--color-info)] border-[var(--color-info)]/20',
-    cancelled: 'bg-[var(--color-danger)]/20 text-[var(--color-danger)] border-[var(--color-danger)]/20',
-  };
-
-  const appointmentDate = new Date(appointment.appointment_at).toLocaleDateString(
-    'en-IN',
-    { year: 'numeric', month: 'short', day: '2-digit' }
-  );
-
-  const appointmentTime = new Date(appointment.appointment_at).toLocaleTimeString(
-    'en-IN',
-    { hour: '2-digit', minute: '2-digit' }
-  );
-
-  return (
-    <motion.div
-      initial={{ opacity: 0, x: -10 }}
-      animate={{ opacity: 1, x: 0 }}
-      transition={{ duration: 0.2 }}
-      onClick={onClick}
-      className="grid grid-cols-1 md:grid-cols-5 gap-4 items-center p-4 border-b border-[var(--color-neutral-800)] hover:bg-[var(--color-surface-overlay)]/50 transition-colors duration-150 last:border-0 cursor-pointer"
-    >
-      {/* Customer Name */}
-      <div>
-        <p className="font-medium text-[var(--color-neutral-100)]">
-          {appointment.customer_name}
-        </p>
-        <p className="text-xs text-[var(--color-neutral-500)]">{appointment.service_name}</p>
-      </div>
-
-      {/* Date & Time */}
-      <div className="text-sm text-[var(--color-neutral-300)]">
-        <div className="font-medium">{appointmentDate}</div>
-        <div className="text-xs text-[var(--color-neutral-500)]">{appointmentTime}</div>
-      </div>
-
-      {/* Staff */}
-      <div className="text-sm text-[var(--color-neutral-300)]">
-        {appointment.staff_name || <span className="text-[var(--color-neutral-500)] italic">Unassigned</span>}
-      </div>
-
-      {/* Status Badge */}
-      <div className={`inline-flex items-center px-3 py-1.5 rounded-full text-xs font-semibold border w-fit ${statusColorMap[appointment.status]}`}>
-        {appointment.status.charAt(0).toUpperCase() + appointment.status.slice(1)}
-      </div>
-
-      {/* Action */}
-      <div className="flex justify-end">
-        <button
-          className="px-3 py-2 text-sm font-medium text-[var(--color-accent)] hover:bg-[var(--color-surface-overlay)] rounded-lg transition-colors duration-150 focus:outline-none focus:ring-2 focus:ring-[var(--color-accent)]/50"
-          aria-label={`View details for ${appointment.customer_name}`}
-        >
-          View
-        </button>
-      </div>
-    </motion.div>
-  );
-};
-
-/**
- * SECTION HEADER
- * UI/UX Pro Max - Priority 6: Semantic typography hierarchy
- */
-const SectionHeader = ({
-  title,
-  description,
-  action,
-}: {
-  title: string;
-  description?: string;
-  action?: React.ReactNode;
-}) => (
-  <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 mb-6">
-    <div>
-      <h2 className="text-2xl font-bold text-[var(--color-neutral-100)] mb-1">
-        {title}
-      </h2>
-      {description && (
-        <p className="text-sm text-[var(--color-neutral-400)]">{description}</p>
-      )}
-    </div>
-    {action && <div>{action}</div>}
-  </div>
-);
+import RevenueOverviewModal from '../components/dashboard/RevenueOverviewModal';
+import AnalyticsWeeklyDrawer from '../components/dashboard/AnalyticsWeeklyDrawer';
+import { useSalonKpis } from '../components/dashboard/hooks/useSalonKpis';
+import { useWeeklyBookings } from '../components/dashboard/hooks/useWeeklyBookings';
+import { useSelectedWeek } from '../components/dashboard/hooks/useSelectedWeek';
+import AnalyticsTab from '../components/dashboard/AnalyticsTab';
+import OverviewTab from '../components/dashboard/OverviewTab';
 
 // ============================================================
 // MAIN COMPONENT
@@ -385,17 +36,27 @@ export default function SalonOwnerDashboard() {
     'overview'
   );
   const [showRevenueOverview, setShowRevenueOverview] = useState(false);
+  const [showAnalyticsDrawer, setShowAnalyticsDrawer] = useState(false);
   const [selectedAppointment, setSelectedAppointment] = useState<any>(null);
 
-  // Fetch real KPI data from backend
-  const { data: kpiData, isLoading: kpisLoading, error: kpiError } = useQuery({
-    queryKey: ['kpis'],
-    queryFn: fetchKPIs,
-    refetchInterval: 60000, // Refetch every minute
-  });
+  const weeklySalonId = user?.salon_id || undefined;
 
-  // Fetch today's appointments from backend
+  const { data: kpiData, isLoading: kpisLoading, error: kpiError } = useSalonKpis();
   const { data: todayAppointments, isLoading: appointmentsLoading } = useTodayAppointments();
+  const {
+    thisWeekTrend,
+    priorWeekTrend,
+    analytics: weeklyAnalytics,
+    loading: loadingWeekly,
+  } = useWeeklyBookings(weeklySalonId);
+  const {
+    weekOffset,
+    setWeekOffset,
+    weekRange,
+    selectedWeekTrend,
+    loadingSelectedWeek,
+    delta: selectedWeekDelta,
+  } = useSelectedWeek({ enabled: selectedTab === 'analytics', salonId: weeklySalonId });
 
   if (user?.role !== 'salon_owner') {
     return (
@@ -411,45 +72,6 @@ export default function SalonOwnerDashboard() {
       </div>
     );
   }
-
-  // Format revenue as Indian Rupees
-  const formatRevenue = (value: number) => {
-    return `₹${value.toLocaleString('en-IN')}`;
-  };
-
-  // Build KPI cards with real data
-  const kpiCards: KPICard[] = [
-    {
-      label: 'Total Revenue',
-      value: kpisLoading ? '...' : formatRevenue(kpiData?.total_revenue || 0),
-      icon: <TrendingUp className="w-5 h-5" />,
-      color: 'accent',
-    },
-    {
-      label: 'Revenue Overview',
-      value: 'View Details',
-      icon: <BarChart3 className="w-5 h-5" />,
-      color: 'info',
-    },
-    {
-      label: 'Appointments Today',
-      value: kpisLoading ? '...' : (kpiData?.todays_appointments || 0).toString(),
-      icon: <Calendar className="w-5 h-5" />,
-      color: 'success',
-    },
-    {
-      label: 'Active Customers',
-      value: kpisLoading ? '...' : (kpiData?.unique_customers || 0).toString(),
-      icon: <Users className="w-5 h-5" />,
-      color: 'warning',
-    },
-    {
-      label: 'Total Bookings',
-      value: kpisLoading ? '...' : (kpiData?.total_appointments || 0).toString(),
-      icon: <Zap className="w-5 h-5" />,
-      color: 'accent',
-    },
-  ];
 
   return (
     <div className="min-h-screen bg-[var(--color-surface-base)] text-[var(--color-neutral-100)]">
@@ -492,139 +114,19 @@ export default function SalonOwnerDashboard() {
 
         {/* OVERVIEW TAB */}
         {selectedTab === 'overview' && (
-          <motion.div
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.3 }}
-            className="space-y-12"
-          >
-            {/* KPI GRID - UI/UX Pro Max Priority 5: Responsive grid */}
-            <div>
-              <SectionHeader
-                title="Key Metrics"
-                description="Real-time performance indicators"
-              />
-              {kpisLoading ? (
-                <div className="flex items-center justify-center h-40">
-                  <Loader2 className="w-8 h-8 text-[var(--color-accent)] animate-spin" />
-                </div>
-              ) : kpiError ? (
-                <div className="text-center py-8 text-[var(--color-neutral-400)]">
-                  Failed to load metrics. Please try again.
-                </div>
-              ) : (
-                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-6 auto-rows-fr">
-                  {kpiCards.map((kpi) => (
-                    <KPICard 
-                      key={kpi.label} 
-                      data={kpi} 
-                      // Revenue Overview opens modal, others are active buttons (placeholder action for now)
-                      onClick={kpi.label === 'Revenue Overview' 
-                        ? () => setShowRevenueOverview(true) 
-                        : () => console.log(`${kpi.label} clicked`)}
-                    />
-                  ))}
-                </div>
-              )}
-            </div>
-
-            {/* TODAY'S APPOINTMENTS */}
-            <div>
-              <SectionHeader
-                title="Today's Appointments"
-                description={`${todayAppointments?.length || 0} appointments scheduled`}
-                action={
-                  <button
-                    className="flex items-center gap-2 px-4 py-2.5 bg-[var(--color-surface-overlay)] border border-[var(--color-neutral-700)] text-[var(--color-neutral-200)] font-medium rounded-lg hover:bg-[var(--color-surface-floating)] transition-colors duration-150 focus:outline-none focus:ring-2 focus:ring-[var(--color-accent)]/50"
-                    aria-label="Add new appointment"
-                  >
-                    <Plus className="w-5 h-5" />
-                    Add Appointment
-                  </button>
-                }
-              />
-              <div className="bg-[var(--color-surface-raised)] border border-[var(--color-neutral-800)] rounded-2xl overflow-hidden">
-                <div className="hidden md:grid grid-cols-5 gap-4 items-center p-4 bg-[var(--color-surface-overlay)] border-b border-[var(--color-neutral-800)] font-medium text-sm text-[var(--color-neutral-400)]">
-                  <div>Customer</div>
-                  <div>Time</div>
-                  <div>Staff</div>
-                  <div>Status</div>
-                  <div className="text-right">Action</div>
-                </div>
-                <div>
-                  {appointmentsLoading ? (
-                    <div className="flex items-center justify-center py-12">
-                      <Loader2 className="w-8 h-8 text-[var(--color-accent)] animate-spin" />
-                    </div>
-                  ) : todayAppointments && todayAppointments.length > 0 ? (
-                    todayAppointments.map((apt) => (
-                      <AppointmentRow
-                        key={apt.id}
-                        appointment={apt}
-                        onClick={() =>
-                          setSelectedAppointment({
-                            id: apt.id,
-                            booking_reference: (apt as any).booking_reference ?? apt.id,
-                            service: apt.service_name,
-                            customer: apt.customer_name,
-                            customer_id: (apt as any).customer_id ?? undefined,
-                            appointment_at: apt.appointment_at,
-                            status: apt.status as any,
-                            final_price: apt.final_price,
-                          })
-                        }
-                      />
-                    ))
-                  ) : (
-                    <div className="text-center py-12 text-[var(--color-neutral-400)]">
-                      <Calendar className="w-12 h-12 mx-auto mb-4 opacity-50" />
-                      <p>No appointments scheduled for today</p>
-                    </div>
-                  )}
-                </div>
-              </div>
-            </div>
-
-            {/* QUICK ACTIONS */}
-            <div>
-              <SectionHeader
-                title="Quick Actions"
-                description="Common tasks"
-              />
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                <motion.button
-                  whileHover={{ scale: 1.02 }}
-                  whileTap={{ scale: 0.98 }}
-                  onClick={() => navigate('/owner/services')}
-                  className="flex items-center justify-center gap-3 p-4 bg-[var(--color-surface-overlay)] border border-[var(--color-neutral-700)] rounded-xl hover:border-[var(--color-accent)] hover:bg-[var(--color-surface-floating)] transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-[var(--color-accent)]/50"
-                  aria-label="Manage Services"
-                >
-                  <Zap className="w-5 h-5 text-[var(--color-accent)]" />
-                  <span className="font-medium text-[var(--color-neutral-100)]">Manage Services</span>
-                </motion.button>
-                <motion.button
-                  whileHover={{ scale: 1.02 }}
-                  whileTap={{ scale: 0.98 }}
-                  onClick={() => navigate('/reports')}
-                  className="flex items-center justify-center gap-3 p-4 bg-[var(--color-surface-overlay)] border border-[var(--color-neutral-700)] rounded-xl hover:border-[var(--color-accent)] hover:bg-[var(--color-surface-floating)] transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-[var(--color-accent)]/50"
-                  aria-label="View Reports"
-                >
-                  <FileText className="w-5 h-5 text-[var(--color-accent)]" />
-                  <span className="font-medium text-[var(--color-neutral-100)]">View Reports</span>
-                </motion.button>
-                <motion.button
-                  whileHover={{ scale: 1.02 }}
-                  whileTap={{ scale: 0.98 }}
-                  onClick={() => setSelectedTab('appointments')}
-                  className="flex items-center justify-center gap-3 p-4 bg-[var(--color-surface-overlay)] border border-[var(--color-neutral-700)] rounded-xl hover:border-[var(--color-accent)] hover:bg-[var(--color-surface-floating)] transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-[var(--color-accent)]/50"
-                  aria-label="View All Appointments"
-                >
-                  <Calendar className="w-5 h-5 text-[var(--color-accent)]" />
-                  <span className="font-medium text-[var(--color-neutral-100)]">View All Appointments</span>
-                </motion.button>
-              </div>
-            </div>
-          </motion.div>
+          <OverviewTab
+            kpiData={kpiData}
+            kpisLoading={kpisLoading}
+            kpiError={kpiError}
+            weeklyAnalytics={weeklyAnalytics}
+            loadingWeekly={loadingWeekly}
+            todayAppointments={todayAppointments}
+            appointmentsLoading={appointmentsLoading}
+            onShowRevenueOverview={() => setShowRevenueOverview(true)}
+            onJumpToAnalytics={() => setSelectedTab('analytics')}
+            onJumpToAppointments={() => setSelectedTab('appointments')}
+            onOpenAppointment={setSelectedAppointment}
+          />
         )}
 
         {/* APPOINTMENTS TAB - Full appointments management */}
@@ -652,29 +154,16 @@ export default function SalonOwnerDashboard() {
           </motion.div>
         )}
 
-        {/* ANALYTICS TAB - Analytics dashboard */}
+        {/* ANALYTICS TAB */}
         {selectedTab === 'analytics' && (
-          <motion.div
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.3 }}
-          >
-            <div className="text-center py-12">
-              <BarChart3 className="w-16 h-16 text-[var(--color-accent)] mx-auto mb-4" />
-              <h3 className="text-xl font-semibold text-[var(--color-neutral-100)] mb-2">
-                Analytics & Reports
-              </h3>
-              <p className="text-[var(--color-neutral-400)] mb-6">
-                View detailed analytics and business insights
-              </p>
-              <button
-                onClick={() => navigate('/analytics')}
-                className="px-6 py-3 bg-[var(--color-accent)] text-[var(--color-surface-base)] font-semibold rounded-lg hover:bg-[var(--color-accent-hover)] transition-colors"
-              >
-                Open Analytics Dashboard
-              </button>
-            </div>
-          </motion.div>
+          <AnalyticsTab
+            weekOffset={weekOffset}
+            setWeekOffset={setWeekOffset}
+            weekRange={weekRange}
+            selectedWeekTrend={selectedWeekTrend}
+            loadingSelectedWeek={loadingSelectedWeek}
+            selectedWeekDelta={selectedWeekDelta}
+          />
         )}
       </main>
 
@@ -684,6 +173,18 @@ export default function SalonOwnerDashboard() {
         onClose={() => setShowRevenueOverview(false)}
         revenueByService={kpiData?.revenue_by_service || []}
         totalRevenue={kpiData?.total_revenue || 0}
+      />
+
+      <AnalyticsWeeklyDrawer
+        isOpen={showAnalyticsDrawer}
+        onClose={() => setShowAnalyticsDrawer(false)}
+        thisWeek={thisWeekTrend?.data || []}
+        priorWeek={priorWeekTrend?.data || []}
+        thisCount={weeklyAnalytics.thisCount}
+        priorCount={weeklyAnalytics.priorCount}
+        delta={weeklyAnalytics.delta}
+        trend={weeklyAnalytics.trend}
+        onOpenFullAnalytics={() => setSelectedTab('analytics')}
       />
 
       <AppointmentDrawer

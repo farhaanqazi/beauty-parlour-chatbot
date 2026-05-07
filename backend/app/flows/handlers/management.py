@@ -26,6 +26,7 @@ async def handle_management(
     services: Sequence[SalonService],
     flow_config: dict[str, Any],
     state_was_reset: bool,
+    customer: Any = None,  # noqa: ARG001 — accepted for handler-signature parity
 ) -> tuple[FlowResult, bool] | None:
     """Handle SELECT_APPOINTMENT and MANAGE_APPOINTMENT_MENU steps.
 

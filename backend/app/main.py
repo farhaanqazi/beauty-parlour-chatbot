@@ -32,6 +32,7 @@ from app.messaging.dispatcher import MessageDispatcher
 from app.redis.client import build_redis_client
 from app.redis.state_store import RedisStateStore
 from app.services.email_service import EmailService
+from app.services.telegram_webhook_registrar import register_telegram_webhooks
 from app.utils.logger import app_logger
 
 
@@ -78,7 +79,17 @@ async def lifespan(app: FastAPI):
         logger.info(
             f"Application started: {settings.app_name} (env={settings.environment}, debug={settings.debug})"
         )
-        
+
+        # Auto-register Telegram webhooks against the current public base URL.
+        # Idempotent: skips bots already pointing at the right URL.
+        async with db_session.session_factory() as registrar_db:
+            await register_telegram_webhooks(
+                db=registrar_db,
+                http_client=http_client,
+                base_url=settings.webhook_base_url,
+                api_prefix=settings.api_prefix,
+            )
+
         yield
         
     except Exception as e:

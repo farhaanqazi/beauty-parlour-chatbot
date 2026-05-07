@@ -9,6 +9,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, Sequence
 
 from app.core.enums import ConversationStep, UserIntent
+from app.db.models.customer import Customer
 from app.db.models.salon import Salon, SalonService
 from app.flows.definitions import GREETING_TOKENS
 from app.schemas.messages import FlowResult, OutboundInstruction
@@ -16,6 +17,103 @@ from app.schemas.state import ConversationState
 
 if TYPE_CHECKING:
     from app.flows.engine import ConversationEngine
+
+
+def _service_buttons(services: Sequence[SalonService]) -> list[dict[str, str]]:
+    buttons: list[dict[str, str]] = [
+        {"label": svc.name, "callback": f"svc_{svc.id}"} for svc in services
+    ]
+    buttons.append({"label": "\U0001f504 Start Over", "callback": "restart_flow"})
+    return buttons
+
+
+def _advance_to_service(
+    engine: "ConversationEngine",
+    state: ConversationState,
+    services: Sequence[SalonService],
+    intro_text: str,
+) -> tuple[FlowResult, bool]:
+    """Skip directly to SERVICE selection (used when name/phone/email are already on file)."""
+    engine._advance_step(state, ConversationStep.SERVICE)
+    return FlowResult(
+        state=state,
+        messages=[
+            OutboundInstruction(text=intro_text, buttons=_service_buttons(services)),
+        ],
+    ), False
+
+
+def _handle_returning_customer(
+    engine: "ConversationEngine",
+    state: ConversationState,
+    customer: Customer | None,
+    services: Sequence[SalonService],
+    state_was_reset: bool,
+    intro_prefix: str = "",
+) -> tuple[FlowResult, bool]:
+    """Decide what to ask a returning customer based on what's already on file.
+
+    Order of asks: name → phone → email → (skip to service if all known).
+    Pre-fills slots so downstream steps don't re-ask for the same data.
+    """
+    name = (customer.display_name or "").strip() if customer else ""
+    phone = (customer.phone_number or "").strip() if customer else ""
+    email = (customer.email or "").strip() if customer else ""
+
+    if name:
+        state.slots.customer_name = name
+    if phone:
+        state.slots.phone_number = phone
+    if email:
+        state.slots.email = email
+
+    if not name:
+        engine._advance_step(state, ConversationStep.CUSTOMER_NAME)
+        return FlowResult(
+            state=state,
+            messages=[OutboundInstruction(text=f"{intro_prefix}First, may I have your name?")],
+        ), state_was_reset
+
+    if not phone:
+        engine._advance_step(state, ConversationStep.PHONE_NUMBER)
+        return FlowResult(
+            state=state,
+            messages=[OutboundInstruction(
+                text=f"{intro_prefix}Welcome back, {name}! We don't have your phone number on file — please share it (at least 10 digits):",
+                buttons=[{"label": "⏭️ Skip", "callback": "action_skip_phone"}],
+            )],
+        ), state_was_reset
+
+    if not email:
+        engine._advance_step(state, ConversationStep.EMAIL)
+        return FlowResult(
+            state=state,
+            messages=[OutboundInstruction(
+                text=f"{intro_prefix}Welcome back, {name}! We don't have your email on file — please share it:",
+                buttons=[{"label": "⏭️ Skip", "callback": "action_skip_email"}],
+            )],
+        ), state_was_reset
+
+    # All three on file: show "Continue / Update phone / Update email" choice
+    engine._advance_step(state, ConversationStep.UPDATE_CONTACT)
+    return FlowResult(
+        state=state,
+        messages=[OutboundInstruction(
+            text=(
+                f"{intro_prefix}Welcome back, {name}! \U0001f44b\n\n"
+                f"\U0001f4cb On file:\n"
+                f"\U0001f4de {phone}\n"
+                f"\U0001f4e7 {email}\n\n"
+                f"Continue with these or update?"
+            ),
+            buttons=[
+                {"label": "✅ Continue Booking", "callback": "action_continue_with_details"},
+                {"label": "✏️ Update Phone", "callback": "action_update_phone"},
+                {"label": "✏️ Update Email", "callback": "action_update_email"},
+                {"label": "\U0001f504 Start Over", "callback": "restart_flow"},
+            ],
+        )],
+    ), state_was_reset
 
 
 def _language_buttons(flow_config: dict[str, Any]) -> list[dict[str, str]]:
@@ -43,6 +141,7 @@ async def handle_booking(
     services: Sequence[SalonService],
     flow_config: dict[str, Any],
     state_was_reset: bool,
+    customer: Customer | None = None,
 ) -> tuple[FlowResult, bool] | None:
     """Handle GREETING, MAIN_MENU, LANGUAGE, CUSTOMER_NAME, SERVICE,
     SAMPLE_IMAGES, and CONFIRMATION steps.
@@ -54,13 +153,7 @@ async def handle_booking(
     if state.step == ConversationStep.GREETING:
         if state.slots.language and cleaned_text == "action_book_new":
             state.intent = UserIntent.NEW_BOOKING
-            engine._advance_step(state, ConversationStep.CUSTOMER_NAME)
-            return FlowResult(
-                state=state,
-                messages=[
-                    OutboundInstruction(text="First, may I have your name?"),
-                ],
-            ), state_was_reset
+            return _handle_returning_customer(engine, state, customer, services, state_was_reset)
 
         if state.slots.language and cleaned_text == "action_manage_existing":
             state.intent = UserIntent.MANAGE_BOOKING
@@ -83,6 +176,37 @@ async def handle_booking(
             # Got the greeting, clear the flag and show language options
             state.awaiting_greeting = False
 
+        # Returning customer: personalize the greeting and, if their preferred
+        # language is on file, skip the language picker entirely. New customers
+        # (no display_name) fall through to the standard salon greeting below.
+        returning_name = (customer.display_name or "").strip() if customer else ""
+        preferred_language = (customer.preferred_language or "").strip() if customer else ""
+
+        if returning_name and preferred_language:
+            state.slots.language = preferred_language
+            engine._advance_step(state, ConversationStep.MAIN_MENU)
+            return FlowResult(
+                state=state,
+                messages=[
+                    OutboundInstruction(
+                        text=f"Welcome back, {returning_name}! \U0001f44b\n\nWhat would you like to do?",
+                        buttons=_main_menu_buttons(),
+                    ),
+                ],
+            ), state_was_reset
+
+        if returning_name:
+            engine._advance_step(state, ConversationStep.LANGUAGE)
+            return FlowResult(
+                state=state,
+                messages=[
+                    OutboundInstruction(
+                        text=f"Welcome back, {returning_name}! \U0001f44b\n\nChoose your language:",
+                        buttons=_language_buttons(flow_config),
+                    ),
+                ],
+            ), state_was_reset
+
         engine._advance_step(state, ConversationStep.LANGUAGE)
         greeting_text = flow_config["greeting"].format(salon_name=salon.name)
         return FlowResult(
@@ -99,13 +223,7 @@ async def handle_booking(
         # Route based on user's choice
         if cleaned_text == "action_book_new":
             state.intent = UserIntent.NEW_BOOKING
-            engine._advance_step(state, ConversationStep.CUSTOMER_NAME)
-            return FlowResult(
-                state=state,
-                messages=[
-                    OutboundInstruction(text="First, may I have your name?"),
-                ],
-            ), state_was_reset
+            return _handle_returning_customer(engine, state, customer, services, state_was_reset)
 
         elif cleaned_text == "action_manage_existing":
             state.intent = UserIntent.MANAGE_BOOKING
@@ -155,15 +273,10 @@ async def handle_booking(
                     ],
                 ), state_was_reset
 
-            engine._advance_step(state, ConversationStep.CUSTOMER_NAME)
-            return FlowResult(
-                state=state,
-                messages=[
-                    OutboundInstruction(
-                        text=f"Great! I'll continue in {language['label']}.\n\nFirst, may I have your name?"
-                    )
-                ],
-            ), state_was_reset
+            return _handle_returning_customer(
+                engine, state, customer, services, state_was_reset,
+                intro_prefix=f"Great! I'll continue in {language['label']}.\n\n",
+            )
 
         engine._advance_step(state, ConversationStep.MAIN_MENU)
         return FlowResult(
@@ -175,6 +288,35 @@ async def handle_booking(
                 )
             ],
         ), state_was_reset
+
+    if state.step == ConversationStep.UPDATE_CONTACT:
+        if cleaned_text == "action_continue_with_details":
+            return _advance_to_service(
+                engine, state, services,
+                f"Great, {state.slots.customer_name}! Which service do you need:",
+            )
+        if cleaned_text == "action_update_phone":
+            state.previous_step = ConversationStep.UPDATE_CONTACT
+            engine._advance_step(state, ConversationStep.PHONE_NUMBER)
+            return FlowResult(
+                state=state,
+                messages=[OutboundInstruction(
+                    text="Please enter the new phone number (at least 10 digits):",
+                    buttons=[{"label": "⏭️ Skip", "callback": "action_skip_phone"}],
+                )],
+            ), state_was_reset
+        if cleaned_text == "action_update_email":
+            state.previous_step = ConversationStep.UPDATE_CONTACT
+            engine._advance_step(state, ConversationStep.EMAIL)
+            return FlowResult(
+                state=state,
+                messages=[OutboundInstruction(
+                    text="Please enter the new email address:",
+                    buttons=[{"label": "⏭️ Skip", "callback": "action_skip_email"}],
+                )],
+            ), state_was_reset
+        # Anything else: re-show the choice
+        return _handle_returning_customer(engine, state, customer, services, state_was_reset)
 
     if state.step == ConversationStep.CUSTOMER_NAME:
         name = cleaned_text.strip()

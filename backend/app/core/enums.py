@@ -51,6 +51,7 @@ class ConversationStep(str, Enum):
     PHONE_NUMBER = "phone_number"
     CONFIRMATION = "confirmation"
     COMPLETE = "complete"
+    UPDATE_CONTACT = "update_contact"   # Returning customer choosing to continue / update phone / update email
 
 
 class NotificationJobType(str, Enum):

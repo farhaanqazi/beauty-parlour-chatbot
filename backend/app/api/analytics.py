@@ -127,52 +127,69 @@ async def get_kpis(
 async def get_revenue_trends(
     request: Request,
     days: int = Query(default=30, ge=1, le=365),
+    start_date: str | None = Query(default=None),
+    end_date: str | None = Query(default=None),
     db: AsyncSession = Depends(get_db),
     user: AuthenticatedUser = Depends(get_current_user),
 ) -> Dict[str, Any]:
     """
-    Get revenue trends over the specified period.
-    Returns daily revenue data for charting.
+    Daily revenue trends for charting. Accepts either an explicit
+    start_date/end_date window (ISO 8601) or a `days` lookback (default 30).
+
+    Revenue uses `a.final_price` and counts statuses (completed, confirmed, pending) —
+    matching the kpis endpoint so the numbers are consistent across the dashboard.
     """
+    # Resolve date range
+    if start_date and end_date:
+        try:
+            q_start = datetime.fromisoformat(start_date.replace("Z", "+00:00"))
+            q_end = datetime.fromisoformat(end_date.replace("Z", "+00:00"))
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid ISO date in start_date / end_date")
+    else:
+        q_end = datetime.now()
+        q_start = q_end - timedelta(days=days)
+
+    # Tenant filter (qualified column to avoid ambiguity in any joined query)
+    salon_filter = ""
+    params: Dict[str, Any] = {"q_start": q_start, "q_end": q_end}
+    if user.role != "admin":
+        salon_filter = "AND a.salon_id = :salon_id"
+        params["salon_id"] = user.salon_id
+
+    query = text(f"""
+        SELECT
+            DATE(a.appointment_at) as date,
+            COALESCE(SUM(a.final_price), 0) as revenue,
+            COUNT(a.id) as appointment_count
+        FROM appointments a
+        WHERE a.status IN ('completed', 'confirmed', 'pending')
+          AND a.appointment_at >= :q_start
+          AND a.appointment_at < :q_end
+          {salon_filter}
+        GROUP BY DATE(a.appointment_at)
+        ORDER BY DATE(a.appointment_at) ASC
+    """)
+
     try:
-        filter_clause, params = get_salon_filter(user)
-        
-        if filter_clause:
-            filter_clause = f"AND {filter_clause.replace('WHERE ', '')}"
-        
-        query = text(f"""
-            SELECT 
-                DATE(a.appointment_at) as date,
-                COALESCE(SUM(ss.price), 0) as revenue,
-                COUNT(a.id) as appointment_count
-            FROM appointments a
-            LEFT JOIN salon_services ss ON a.service_id = ss.id
-            WHERE a.status = 'completed'
-              AND a.appointment_at >= :start_date
-              {filter_clause}
-            GROUP BY DATE(a.appointment_at)
-            ORDER BY DATE(a.appointment_at) ASC
-        """)
-        
-        start_date = datetime.now() - timedelta(days=days)
-        result = await db.execute(query, {**params, "start_date": start_date})
+        result = await db.execute(query, params)
         rows = result.fetchall()
-        
-        return {
-            "data": [
-                {
-                    "date": row.date.isoformat(),
-                    "revenue": float(row.revenue) if row.revenue else 0,
-                    "appointment_count": row.appointment_count,
-                }
-                for row in rows
-            ],
-            "total_revenue": sum(float(row.revenue) if row.revenue else 0 for row in rows),
-            "total_appointments": sum(row.appointment_count for row in rows),
-        }
     except Exception as e:
         print(f"Error in revenue trends: {e}")
         return {"data": [], "total_revenue": 0, "total_appointments": 0, "error": str(e)}
+
+    return {
+        "data": [
+            {
+                "date": row.date.isoformat(),
+                "revenue": float(row.revenue) if row.revenue else 0,
+                "appointment_count": row.appointment_count,
+            }
+            for row in rows
+        ],
+        "total_revenue": sum(float(row.revenue) if row.revenue else 0 for row in rows),
+        "total_appointments": sum(row.appointment_count for row in rows),
+    }
 
 
 @router.get("/analytics/revenue/by-service")

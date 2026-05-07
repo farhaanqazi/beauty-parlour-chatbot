@@ -97,7 +97,7 @@ class ConversationEngine:
         # Dispatch to focused step handlers — all helpers remain on ConversationEngine.
         for _handler in (handle_booking, handle_scheduling, handle_management):
             _result = await _handler(
-                self, state, cleaned_text, salon, services, flow_config, state_was_reset
+                self, state, cleaned_text, salon, services, flow_config, state_was_reset, customer
             )
             if _result is not None:
                 return _result

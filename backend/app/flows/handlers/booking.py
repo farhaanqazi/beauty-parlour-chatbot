@@ -8,10 +8,11 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, Sequence
 
-from app.core.enums import ConversationStep, UserIntent
+from app.core.enums import ChannelType, ConversationStep, UserIntent
 from app.db.models.customer import Customer
 from app.db.models.salon import Salon, SalonService
 from app.flows.definitions import GREETING_TOKENS
+from app.flows.slot_filling import format_service_label, next_booking_step
 from app.schemas.messages import FlowResult, OutboundInstruction
 from app.schemas.state import ConversationState
 
@@ -21,7 +22,7 @@ if TYPE_CHECKING:
 
 def _service_buttons(services: Sequence[SalonService]) -> list[dict[str, str]]:
     buttons: list[dict[str, str]] = [
-        {"label": svc.name, "callback": f"svc_{svc.id}"} for svc in services
+        {"label": format_service_label(svc), "callback": f"svc_{svc.id}"} for svc in services
     ]
     buttons.append({"label": "\U0001f504 Start Over", "callback": "restart_flow"})
     return buttons
@@ -51,10 +52,15 @@ def _handle_returning_customer(
     state_was_reset: bool,
     intro_prefix: str = "",
 ) -> tuple[FlowResult, bool]:
-    """Decide what to ask a returning customer based on what's already on file.
+    """Greet a returning customer and route them into the booking flow.
 
-    Order of asks: name → phone → email → (skip to service if all known).
-    Pre-fills slots so downstream steps don't re-ask for the same data.
+    Hydrates known slots from the Customer profile, then either:
+    - Shows the "Continue / Update phone / Update email" menu when name + phone +
+      email are all on file (preserving the existing UPDATE_CONTACT UX), or
+    - Hands off to slot-filling, which dispatches to the first missing required
+      slot — typically SERVICE for a returning customer with name on file. Email
+      and phone are optional, so they're collected at the end of the flow (after
+      time-confirm), not interrupted upfront.
     """
     name = (customer.display_name or "").strip() if customer else ""
     phone = (customer.phone_number or "").strip() if customer else ""
@@ -67,53 +73,54 @@ def _handle_returning_customer(
     if email:
         state.slots.email = email
 
-    if not name:
+    if name and phone and email:
+        engine._advance_step(state, ConversationStep.UPDATE_CONTACT)
+        return FlowResult(
+            state=state,
+            messages=[OutboundInstruction(
+                text=(
+                    f"{intro_prefix}Welcome back, {name}! \U0001f44b\n\n"
+                    f"\U0001f4cb On file:\n"
+                    f"\U0001f4de {phone}\n"
+                    f"\U0001f4e7 {email}\n\n"
+                    f"Continue with these or update?"
+                ),
+                buttons=[
+                    {"label": "✅ Continue Booking", "callback": "action_continue_with_details"},
+                    {"label": "✏️ Update Phone", "callback": "action_update_phone"},
+                    {"label": "✏️ Update Email", "callback": "action_update_email"},
+                    {"label": "\U0001f504 Start Over", "callback": "restart_flow"},
+                ],
+            )],
+        ), state_was_reset
+
+    next_step = next_booking_step(state)
+    welcome_prefix = f"{intro_prefix}Welcome back, {name}! \U0001f44b\n\n" if name else intro_prefix
+
+    if next_step == ConversationStep.CUSTOMER_NAME:
         engine._advance_step(state, ConversationStep.CUSTOMER_NAME)
         return FlowResult(
             state=state,
             messages=[OutboundInstruction(text=f"{intro_prefix}First, may I have your name?")],
         ), state_was_reset
 
-    if not phone:
-        engine._advance_step(state, ConversationStep.PHONE_NUMBER)
-        return FlowResult(
-            state=state,
-            messages=[OutboundInstruction(
-                text=f"{intro_prefix}Welcome back, {name}! We don't have your phone number on file — please share it (at least 10 digits):",
-                buttons=[{"label": "⏭️ Skip", "callback": "action_skip_phone"}],
-            )],
-        ), state_was_reset
+    # Default landing for a returning (or hydrated) customer: jump to SERVICE.
+    engine._advance_step(state, ConversationStep.SERVICE)
+    messages = [OutboundInstruction(
+        text=f"{welcome_prefix}Which service do you need:",
+        buttons=_service_buttons(services),
+    )]
 
-    if not email:
-        engine._advance_step(state, ConversationStep.EMAIL)
-        return FlowResult(
-            state=state,
-            messages=[OutboundInstruction(
-                text=f"{intro_prefix}Welcome back, {name}! We don't have your email on file — please share it:",
-                buttons=[{"label": "⏭️ Skip", "callback": "action_skip_email"}],
-            )],
-        ), state_was_reset
+    # Telegram-only nudge: if we still don't have a phone, append a one-tap
+    # "Share My Number" prompt. Reply-keyboard sits at the bottom of chat
+    # alongside the inline service buttons; user can ignore or tap once.
+    if state.channel == ChannelType.TELEGRAM and not phone:
+        messages.append(OutboundInstruction(
+            text="📞 Tip: tap below to share your number for faster booking next time.",
+            request_contact=True,
+        ))
 
-    # All three on file: show "Continue / Update phone / Update email" choice
-    engine._advance_step(state, ConversationStep.UPDATE_CONTACT)
-    return FlowResult(
-        state=state,
-        messages=[OutboundInstruction(
-            text=(
-                f"{intro_prefix}Welcome back, {name}! \U0001f44b\n\n"
-                f"\U0001f4cb On file:\n"
-                f"\U0001f4de {phone}\n"
-                f"\U0001f4e7 {email}\n\n"
-                f"Continue with these or update?"
-            ),
-            buttons=[
-                {"label": "✅ Continue Booking", "callback": "action_continue_with_details"},
-                {"label": "✏️ Update Phone", "callback": "action_update_phone"},
-                {"label": "✏️ Update Email", "callback": "action_update_email"},
-                {"label": "\U0001f504 Start Over", "callback": "restart_flow"},
-            ],
-        )],
-    ), state_was_reset
+    return FlowResult(state=state, messages=messages), state_was_reset
 
 
 def _language_buttons(flow_config: dict[str, Any]) -> list[dict[str, str]]:
@@ -328,15 +335,12 @@ async def handle_booking(
 
         state.slots.customer_name = name
         engine._advance_step(state, ConversationStep.SERVICE)
-        # Create buttons for services
-        service_buttons = [{"label": svc.name, "callback": f"svc_{svc.id}"} for svc in services]
-        service_buttons.append({"label": "\U0001f504 Start Over", "callback": "restart_flow"})
         return FlowResult(
             state=state,
             messages=[
                 OutboundInstruction(
                     text=f"Thanks, {name}! Which service do you need:",
-                    buttons=service_buttons,
+                    buttons=_service_buttons(services),
                 )
             ],
         ), state_was_reset
@@ -350,15 +354,13 @@ async def handle_booking(
             service = await engine._resolve_service(cleaned_text, services, state.slots.language)
 
         if not service:
-            service_buttons = [{"label": svc.name, "callback": f"svc_{svc.id}"} for svc in services]
-            service_buttons.append({"label": "\U0001f504 Start Over", "callback": "restart_flow"})
-            result, _ = engine._invalid_reply(state, "Please choose a valid service:", buttons=service_buttons)
+            result, _ = engine._invalid_reply(state, "Please choose a valid service:", buttons=_service_buttons(services))
             return result, state_was_reset
         state.slots.service_id = str(service.id)
         state.slots.service_name = service.name
         # Skip sample images, go directly to date selection with quick date buttons
         engine._advance_step(state, ConversationStep.APPOINTMENT_DATE)
-        date_buttons, booked_text = engine._build_date_buttons(salon.timezone, include_back=True)
+        date_buttons, booked_text = await engine._rebuild_date_buttons_with_booked_dates(salon, state=state, services=services, include_back=True)
         return FlowResult(
             state=state,
             messages=[

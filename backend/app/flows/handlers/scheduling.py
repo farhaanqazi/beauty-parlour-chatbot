@@ -18,6 +18,7 @@ from zoneinfo import ZoneInfo
 
 from app.core.enums import ConversationStep, UserIntent
 from app.db.models.salon import Salon, SalonService
+from app.flows.slot_filling import format_service_label, next_booking_step
 from app.schemas.messages import FlowResult, OutboundInstruction
 from app.schemas.state import ConversationState
 
@@ -25,7 +26,60 @@ if TYPE_CHECKING:
     from app.flows.engine import ConversationEngine
 
 
-def _advance_after_contact(
+def _has_any_hour_slot(buttons: list[dict[str, str]]) -> bool:
+    """True if the time-picker has at least one selectable hour (not just the
+    Back/Start Over navigation rows).
+    """
+    return any(btn.get("callback", "").startswith("time_") for btn in buttons)
+
+
+async def _rebuild_time_buttons_with_booked_hours(
+    engine: "ConversationEngine",
+    state: ConversationState,
+    salon: Salon,
+    services: Sequence[SalonService],
+) -> tuple[list[dict[str, str]], str]:
+    """Build the time-picker buttons for the user's current date+service selection,
+    omitting any hours that conflict with existing CONFIRMED bookings (duration +
+    15-min buffer overlap math).
+
+    Returns ``(buttons, booked_text)`` — append ``booked_text`` to the prompt so
+    users see which hours were filtered out. Falls back to a no-filtering render
+    if the appointment_service query fails.
+    """
+    start_hour, end_hour = engine._get_business_hours(salon)
+    selected = engine._find_service_by_id(services, state.slots.service_id)
+    duration_minutes = (
+        selected.duration_minutes
+        if selected and selected.duration_minutes
+        else 60
+    )
+    booked_hours: set[int] | None = None
+    if engine.appointment_service is not None and state.slots.appointment_date:
+        try:
+            booked_hours = await engine.appointment_service.get_booked_hours_for_date(
+                salon_id=salon.id,
+                target_date=state.slots.appointment_date,
+                timezone_name=salon.timezone,
+                new_service_duration_minutes=duration_minutes,
+            )
+        except Exception:
+            booked_hours = None
+
+    if booked_hours is None:
+        booked_hours = set()
+
+    # Block past hours for today
+    now = datetime.now(ZoneInfo(salon.timezone))
+    if state.slots.appointment_date == now.date():
+        # Block up to and including the current hour
+        for hour in range(start_hour, now.hour + 1):
+            booked_hours.add(hour)
+
+    return engine._build_time_buttons(start_hour, end_hour, booked_hours=booked_hours)
+
+
+def _advance_to_next_slot(
     engine: "ConversationEngine",
     state: ConversationState,
     services: Sequence[SalonService],
@@ -33,23 +87,19 @@ def _advance_after_contact(
     *,
     flow_config: dict[str, Any],
 ) -> FlowResult:
-    """Advance the flow after EMAIL or PHONE_NUMBER has been collected (or skipped).
+    """Advance the booking flow to the next missing slot.
 
-    Three exits, in priority order:
-    1. The user clicked "Update phone/email" OR no service has been picked yet
-       (returning customer collecting missing contact before booking starts):
-       jump to SERVICE selection.
-    2. Phone is still missing: ask for phone next.
-    3. Everything we need is in slots: render CONFIRMATION.
-
-    Without this, contact-collection that runs *before* service/date/time
-    selection crashes the CONFIRMATION render with a None appointment_date.
+    With email and phone intentionally removed from BOOKING_SLOTS, the only
+    two outcomes here are:
+    - `next_step == SERVICE`: returning customer used UPDATE_CONTACT or a
+      newly-collected contact left service unset; jump to service selection.
+    - `next_step is None`: every required slot is filled — render CONFIRMATION.
     """
-    needs_service_pick = came_from_update or state.slots.service_id is None
+    next_step = next_booking_step(state)
 
-    if needs_service_pick:
+    if next_step == ConversationStep.SERVICE:
         engine._advance_step(state, ConversationStep.SERVICE)
-        svc_buttons = [{"label": svc.name, "callback": f"svc_{svc.id}"} for svc in services]
+        svc_buttons = [{"label": format_service_label(svc), "callback": f"svc_{svc.id}"} for svc in services]
         svc_buttons.append({"label": "\U0001f504 Start Over", "callback": "restart_flow"})
         prefix = "Updated! " if came_from_update else f"Got it{', ' + state.slots.customer_name if state.slots.customer_name else ''}! "
         return FlowResult(
@@ -57,16 +107,6 @@ def _advance_after_contact(
             messages=[OutboundInstruction(
                 text=f"{prefix}Which service do you need:",
                 buttons=svc_buttons,
-            )],
-        )
-
-    if state.slots.phone_number is None:
-        engine._advance_step(state, ConversationStep.PHONE_NUMBER)
-        return FlowResult(
-            state=state,
-            messages=[OutboundInstruction(
-                text="Please share your phone number so we can reach you about your appointment:",
-                buttons=[{"label": "⏭️ Skip", "callback": "action_skip_phone"}],
             )],
         )
 
@@ -147,6 +187,8 @@ async def handle_scheduling(
     Returns a (FlowResult, state_was_reset) tuple when the step is handled,
     or None so the caller can try the next handler.
     """
+    if cleaned_text.startswith("ignore_date_full"):
+        return FlowResult(state=state, messages=[]), state_was_reset
 
     if state.step == ConversationStep.APPOINTMENT_DATE:
         # Handle button callback (date_YYYY-MM-DD format)
@@ -166,6 +208,75 @@ async def handle_scheduling(
             if time_like_pattern:
                 appointment_date = None  # Force rejection - it's a time, not a date
             else:
+                # --- Intercept standalone month names ---
+                # e.g. "july", "june", "jan" — instead of guessing the day,
+                # ask the user which date in that month they want.
+                MONTH_MAP = {
+                    "january": 1, "february": 2, "march": 3, "april": 4,
+                    "may": 5, "june": 6, "july": 7, "august": 8,
+                    "september": 9, "october": 10, "november": 11, "december": 12,
+                    "jan": 1, "feb": 2, "mar": 3, "apr": 4,
+                    "jun": 6, "jul": 7, "aug": 8,
+                    "sep": 9, "oct": 10, "nov": 11, "dec": 12,
+                }
+                _cleaned_lower = cleaned_text.lower().strip()
+                if _cleaned_lower in MONTH_MAP:
+                    import calendar
+                    month_num = MONTH_MAP[_cleaned_lower]
+                    _now = datetime.now(ZoneInfo(salon.timezone))
+                    _today = _now.date()
+                    _max_date = _today + timedelta(days=90)
+
+                    # Prefer current year; if that month has already passed, use next year
+                    _year = _now.year
+                    if month_num < _now.month:
+                        _year += 1
+
+                    _month_start = date(_year, month_num, 1)
+                    _month_name_full = _month_start.strftime("%B %Y")
+
+                    if _month_start > _max_date:
+                        _date_buttons, _booked_text = await engine._rebuild_date_buttons_with_booked_dates(
+                            salon, state=state, services=services
+                        )
+                        return FlowResult(
+                            state=state,
+                            messages=[
+                                OutboundInstruction(
+                                    text=f"Sorry, {_month_name_full} is more than 3 months away. "
+                                         "Appointments can only be booked up to 3 months in advance."
+                                ),
+                                OutboundInstruction(
+                                    text="Please choose from the next 7 days:\n\U0001f4a1 Or type a specific date (e.g. next Friday, 25/04/2026)" + _booked_text,
+                                    buttons=_date_buttons,
+                                ),
+                            ],
+                        ), state_was_reset
+
+                    # Build per-day buttons for that month (future dates within 90 days)
+                    _last_day = calendar.monthrange(_year, month_num)[1]
+                    _month_end = date(_year, month_num, _last_day)
+                    _effective_end = min(_month_end, _max_date)
+                    _start_day = max(_month_start, _today)
+
+                    _day_buttons: list[dict[str, str]] = []
+                    _d = _start_day
+                    while _d <= _effective_end:
+                        _day_buttons.append({
+                            "label": _d.strftime("%a %d"),
+                            "callback": f"date_{_d.isoformat()}",
+                        })
+                        _d += timedelta(days=1)
+                    _day_buttons.append({"label": "\U0001f504 Start Over", "callback": "restart_flow"})
+
+                    return FlowResult(
+                        state=state,
+                        messages=[OutboundInstruction(
+                            text=f"\U0001f4c5 Which date in *{_month_name_full}* would you like to book?",
+                            buttons=_day_buttons,
+                        )],
+                    ), state_was_reset
+
                 appointment_date = await engine._parse_date(
                     cleaned_text, salon.timezone, state.slots.language
                 )
@@ -232,7 +343,7 @@ async def handle_scheduling(
         max_booking_date = datetime.now(ZoneInfo(salon.timezone)).date() + timedelta(days=90)
         if appointment_date > max_booking_date:
             # Date is too far in the future - show error and date buttons immediately
-            date_buttons, booked_text = engine._build_date_buttons(salon.timezone)
+            date_buttons, booked_text = await engine._rebuild_date_buttons_with_booked_dates(salon, state=state, services=services)
             return FlowResult(
                 state=state,
                 messages=[
@@ -242,6 +353,23 @@ async def handle_scheduling(
                         buttons=date_buttons,
                     ),
                 ],
+            ), state_was_reset
+
+        # --- Check if fully booked before asking for confirmation ---
+        original_date = state.slots.appointment_date
+        state.slots.appointment_date = appointment_date
+        time_buttons, _ = await _rebuild_time_buttons_with_booked_hours(engine, state, salon, services)
+        state.slots.appointment_date = original_date
+
+        if not _has_any_hour_slot(time_buttons):
+            date_buttons, date_booked_text = await engine._rebuild_date_buttons_with_booked_dates(salon, state=state, services=services)
+            formatted_date = appointment_date.strftime("%A, %d %b %Y")
+            return FlowResult(
+                state=state,
+                messages=[OutboundInstruction(
+                    text=f"Sorry — {formatted_date} is fully booked. Please pick another date:" + date_booked_text,
+                    buttons=date_buttons,
+                )],
             ), state_was_reset
 
         state.slots.appointment_date = appointment_date
@@ -284,7 +412,16 @@ async def handle_scheduling(
                 "today", "tomorrow", "next ", "monday", "tuesday", "wednesday",
                 "thursday", "friday", "saturday", "sunday",
             ]
+            # Full/abbreviated month names (standalone, e.g. "july", "jan")
+            month_names = {
+                "january", "february", "march", "april", "may", "june",
+                "july", "august", "september", "october", "november", "december",
+                "jan", "feb", "mar", "apr", "jun", "jul", "aug", "sep", "oct", "nov", "dec",
+            }
             if any(keyword in cleaned_lower for keyword in relative_keywords):
+                date_like = True
+            # Standalone month name — treat as a date, not as yes/no
+            elif cleaned_lower in month_names:
                 date_like = True
             # Date formats: "17 may", "25/04", "25-04", "april 17", etc.
             elif re.match(r'^\d{1,2}\s+(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)', cleaned_lower):
@@ -293,6 +430,9 @@ async def handle_scheduling(
                 date_like = True  # e.g., "25/04", "17-05"
             elif re.match(r'^(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\s+\d{1,2}', cleaned_lower):
                 date_like = True  # e.g., "may 17", "april 25"
+            # Month name followed by a year: "july 2026"
+            elif re.match(r'^(january|february|march|april|may|june|july|august|september|october|november|december|jan|feb|mar|apr|jun|jul|aug|sep|oct|nov|dec)\s+\d{4}$', cleaned_lower):
+                date_like = True  # e.g., "july 2026"
 
             if date_like:
                 # User provided a new date, parse it immediately and show confirmation
@@ -319,7 +459,7 @@ async def handle_scheduling(
                 if appointment_date > max_booking_date:
                     state.step = ConversationStep.APPOINTMENT_DATE
                     state.slots.appointment_date = None
-                    date_buttons, booked_text = engine._build_date_buttons(salon.timezone)
+                    date_buttons, booked_text = await engine._rebuild_date_buttons_with_booked_dates(salon, state=state, services=services)
                     return FlowResult(
                         state=state,
                         messages=[
@@ -329,6 +469,25 @@ async def handle_scheduling(
                                 buttons=date_buttons,
                             ),
                         ],
+                    ), state_was_reset
+
+                # --- Check if fully booked before asking for confirmation ---
+                original_date = state.slots.appointment_date
+                state.slots.appointment_date = appointment_date
+                time_buttons, _ = await _rebuild_time_buttons_with_booked_hours(engine, state, salon, services)
+                state.slots.appointment_date = original_date
+
+                if not _has_any_hour_slot(time_buttons):
+                    state.step = ConversationStep.APPOINTMENT_DATE
+                    state.slots.appointment_date = None
+                    date_buttons, date_booked_text = await engine._rebuild_date_buttons_with_booked_dates(salon, state=state, services=services)
+                    formatted_date = appointment_date.strftime("%A, %d %b %Y")
+                    return FlowResult(
+                        state=state,
+                        messages=[OutboundInstruction(
+                            text=f"Sorry — {formatted_date} is fully booked. Please pick another date:" + date_booked_text,
+                            buttons=date_buttons,
+                        )],
                     ), state_was_reset
 
                 # Save and show confirmation
@@ -384,22 +543,21 @@ async def handle_scheduling(
             # Update previous step so "Back" returns to date confirmation
             state.previous_step = ConversationStep.DATE_CONFIRMATION
 
-            # Generate hourly time slots based on salon business hours
-            # Default to 9 AM - 6 PM if business hours not specified
-            start_hour = 9
-            end_hour = 18
-            if hasattr(salon, "business_hours") and salon.business_hours:
-                # Parse business hours if available (e.g., "09:00-18:00")
-                try:
-                    hours_str = str(salon.business_hours)
-                    if "-" in hours_str:
-                        start_str, end_str = hours_str.split("-")
-                        start_hour = int(start_str.split(":")[0])
-                        end_hour = int(end_str.split(":")[0])
-                except (ValueError, AttributeError):
-                    pass
-
-            time_buttons, booked_text = engine._build_time_buttons(start_hour, end_hour)
+            time_buttons, booked_text = await _rebuild_time_buttons_with_booked_hours(
+                engine, state, salon, services
+            )
+            if not _has_any_hour_slot(time_buttons):
+                # Every hour booked — bounce back to date selection.
+                state.step = ConversationStep.APPOINTMENT_DATE
+                state.slots.appointment_date = None
+                date_buttons, date_booked_text = await engine._rebuild_date_buttons_with_booked_dates(salon, state=state, services=services)
+                return FlowResult(
+                    state=state,
+                    messages=[OutboundInstruction(
+                        text="Sorry — that day is fully booked. Please pick another date:" + date_booked_text,
+                        buttons=date_buttons,
+                    )],
+                ), state_was_reset
 
             return FlowResult(
                 state=state,
@@ -412,7 +570,7 @@ async def handle_scheduling(
             ), state_was_reset
         else:
             # User said No, return to date selection
-            date_buttons, booked_text = engine._build_date_buttons(salon.timezone)
+            date_buttons, booked_text = await engine._rebuild_date_buttons_with_booked_dates(salon, state=state, services=services)
 
             return FlowResult(
                 state=state,
@@ -563,16 +721,9 @@ async def handle_scheduling(
                 engine._advance_step(state, ConversationStep.COMPLETE)
                 state.is_complete = True
                 return FlowResult(state=state, should_update_appointment=True, clear_state=True), state_was_reset
-            # Normal booking: proceed to email
-            engine._advance_step(state, ConversationStep.EMAIL)
-            return FlowResult(
-                state=state,
-                messages=[
-                    OutboundInstruction(
-                        text="Please provide your email address for booking confirmation (optional):",
-                        buttons=[{"label": "⏭️ Skip", "callback": "action_skip_email"}],
-                    )
-                ],
+            # Normal booking: hand off to slot-filling (will skip email/phone if already on file)
+            return _advance_to_next_slot(
+                engine, state, services, came_from_update=False, flow_config=flow_config
             ), state_was_reset
         elif cleaned_text == "time_confirm_no":
             # User wants to change time, go back to time selection
@@ -669,15 +820,8 @@ async def handle_scheduling(
                     confirmation = None
 
                 if confirmation is True:
-                    engine._advance_step(state, ConversationStep.EMAIL)
-                    return FlowResult(
-                        state=state,
-                        messages=[
-                            OutboundInstruction(
-                                text="Please provide your email address for booking confirmation (optional):",
-                                buttons=[{"label": "⏭️ Skip", "callback": "action_skip_email"}],
-                            )
-                        ],
+                    return _advance_to_next_slot(
+                        engine, state, services, came_from_update=False, flow_config=flow_config
                     ), state_was_reset
                 elif confirmation is False:
                     state.step = ConversationStep.APPOINTMENT_TIME
@@ -712,7 +856,7 @@ async def handle_scheduling(
         # User might have clicked "Skip" button or typed "skip"
         if cleaned_text.lower() in {"skip", "action_skip_email", "skip email"}:
             state.slots.email = None
-            return _advance_after_contact(engine, state, services, came_from_update, flow_config=flow_config), state_was_reset
+            return _advance_to_next_slot(engine, state, services, came_from_update, flow_config=flow_config), state_was_reset
 
         # Handle email input
         email = cleaned_text.strip()
@@ -729,7 +873,7 @@ async def handle_scheduling(
             return result, state_was_reset
 
         state.slots.email = email
-        return _advance_after_contact(engine, state, services, came_from_update, flow_config=flow_config), state_was_reset
+        return _advance_to_next_slot(engine, state, services, came_from_update, flow_config=flow_config), state_was_reset
 
     # --- PHONE NUMBER ---
     if state.step == ConversationStep.PHONE_NUMBER:
@@ -738,7 +882,7 @@ async def handle_scheduling(
         # Allow skipping
         if cleaned_text.lower() in {"skip", "action_skip_phone", "skip phone"}:
             state.slots.phone_number = None
-            return _advance_after_contact(
+            return _advance_to_next_slot(
                 engine, state, services, came_from_update, flow_config=flow_config
             ), state_was_reset
 
@@ -758,7 +902,7 @@ async def handle_scheduling(
 
         # Store the cleaned digit string (preserve leading country code if present)
         state.slots.phone_number = digits_only
-        return _advance_after_contact(
+        return _advance_to_next_slot(
             engine, state, services, came_from_update, flow_config=flow_config
         ), state_was_reset
 

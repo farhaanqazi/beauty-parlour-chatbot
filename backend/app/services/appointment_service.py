@@ -366,6 +366,66 @@ class AppointmentService:
         result = await self.db.execute(statement)
         return list(result.scalars().all())
 
+    async def get_booked_hours_for_date(
+        self,
+        salon_id: UUID,
+        target_date: date,
+        timezone_name: str,
+        new_service_duration_minutes: int = DEFAULT_DURATION_MINUTES,
+    ) -> set[int]:
+        """Return hours (0–23 salon-local) that would conflict with an existing
+        CONFIRMED booking on ``target_date``.
+
+        Uses the same overlap math as ``_check_availability_locked``:
+        - existing booking blocks ``[start - 15min, start + duration + 15min)``
+        - candidate hour H is blocked if the proposed ``[H:00, H:00 + new_duration)``
+          slot overlaps that window.
+
+        Without the duration math, the picker can show "available" hours that
+        the create-appointment guard then rejects ("This time slot is already
+        booked. Please choose another.") — confusing UX.
+
+        Looks 2 hours either side of the salon-local day so a late-evening
+        appointment from the previous day can still buffer into morning slots.
+        """
+        tz = ZoneInfo(timezone_name)
+        day_start_local = datetime.combine(target_date, time(0, 0)).replace(tzinfo=tz)
+        day_end_local = datetime.combine(target_date, time(23, 59, 59)).replace(tzinfo=tz)
+
+        statement = (
+            select(Appointment)
+            .options(selectinload(Appointment.service))
+            .where(
+                Appointment.salon_id == salon_id,
+                Appointment.appointment_at >= day_start_local - timedelta(hours=2),
+                Appointment.appointment_at <= day_end_local + timedelta(hours=2),
+                Appointment.status == AppointmentStatus.CONFIRMED,
+            )
+        )
+        result = await self.db.execute(statement)
+        appointments = result.scalars().unique().all()
+
+        buffer = timedelta(minutes=15)
+        new_duration = timedelta(minutes=max(new_service_duration_minutes, 1))
+
+        blocked: set[int] = set()
+        for appt in appointments:
+            existing_dur = timedelta(
+                minutes=appt.service.duration_minutes
+                if appt.service and appt.service.duration_minutes
+                else DEFAULT_DURATION_MINUTES
+            )
+            block_start = appt.appointment_at - buffer
+            block_end = appt.appointment_at + existing_dur + buffer
+
+            for hour in range(24):
+                candidate_start = datetime.combine(target_date, time(hour, 0)).replace(tzinfo=tz)
+                candidate_end = candidate_start + new_duration
+                if candidate_start < block_end and candidate_end > block_start:
+                    blocked.add(hour)
+
+        return blocked
+
     async def lookup_active_appointments(
         self,
         customer: Customer,
@@ -688,63 +748,6 @@ class AppointmentService:
                 return existing
 
         return None
-
-    # ------------------------------------------------------------------
-    # AVAILABILITY — READ-ONLY QUERIES FOR BOOKING DISPLAY
-    # ------------------------------------------------------------------
-
-    async def get_booked_hours_for_date(
-        self,
-        salon_id: UUID,
-        target_date: date,
-        timezone_name: str,
-        start_hour: int = 9,
-        end_hour: int = 18,
-    ) -> set[int]:
-        """
-        Return the set of hours (salon local time) within [start_hour, end_hour)
-        that are unavailable on target_date due to confirmed or pending appointments.
-
-        An hour H is considered booked when any appointment's window
-        [appt_start, appt_start + duration + 15 min buffer) overlaps [H:00, H+1:00).
-        """
-        tz = ZoneInfo(timezone_name)
-        day_start_utc = datetime(
-            target_date.year, target_date.month, target_date.day, 0, 0, 0, tzinfo=tz
-        ).astimezone(ZoneInfo("UTC"))
-        day_end_utc = datetime(
-            target_date.year, target_date.month, target_date.day, 23, 59, 59, tzinfo=tz
-        ).astimezone(ZoneInfo("UTC"))
-
-        stmt = (
-            select(Appointment)
-            .options(selectinload(Appointment.service))
-            .where(
-                Appointment.salon_id == salon_id,
-                Appointment.status.in_([AppointmentStatus.CONFIRMED, AppointmentStatus.PENDING]),
-                Appointment.appointment_at >= day_start_utc,
-                Appointment.appointment_at <= day_end_utc,
-            )
-        )
-        result = await self.db.execute(stmt)
-        appointments = result.scalars().unique().all()
-
-        booked: set[int] = set()
-        for appt in appointments:
-            appt_local = appt.appointment_at.astimezone(tz)
-            dur = DEFAULT_DURATION_MINUTES
-            if appt.service and appt.service.duration_minutes:
-                dur = appt.service.duration_minutes
-            appt_end = appt_local + timedelta(minutes=dur + 15)
-
-            end_total_min = appt_end.hour * 60 + appt_end.minute
-            last_hour = (end_total_min - 1) // 60 if end_total_min > 0 else appt_local.hour
-
-            for h in range(appt_local.hour, min(last_hour + 1, 24)):
-                if start_hour <= h < end_hour:
-                    booked.add(h)
-
-        return booked
 
     async def get_fully_booked_dates(
         self,

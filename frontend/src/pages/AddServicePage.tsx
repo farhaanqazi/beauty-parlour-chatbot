@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ArrowLeft, Scissors, Clock, DollarSign, AlertCircle, CheckCircle } from 'lucide-react';
+import { motion, AnimatePresence } from 'framer-motion';
+import { ArrowLeft, Scissors, Clock, DollarSign, AlertCircle, CheckCircle, Loader } from 'lucide-react';
 import { useAuthStore } from '../store/authStore';
 import { useServices, type CreateServicePayload } from '../hooks/useServices';
 

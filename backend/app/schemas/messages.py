@@ -25,6 +25,9 @@ class OutboundInstruction(BaseModel):
     media_urls: list[str] = Field(default_factory=list)
     # Inline keyboard buttons for Telegram (list of label/callback pairs)
     buttons: list[dict[str, str]] = Field(default_factory=list)  # [{"label": "English", "callback": "lang_english"}]
+    # When True (Telegram only), render a one-tap "Share My Number" reply-keyboard
+    # button instead of inline buttons. Used to silently capture the user's phone.
+    request_contact: bool = False
 
     @field_validator("buttons", mode="before")
     @classmethod

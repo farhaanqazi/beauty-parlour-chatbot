@@ -82,5 +82,10 @@ class TenantService:
             customer.phone_number = inbound.phone_number or inbound.external_user_id
         if inbound.channel == ChannelType.TELEGRAM:
             customer.telegram_chat_id = inbound.telegram_chat_id or inbound.external_user_id
+            # Telegram normally doesn't carry a phone — only set when the user
+            # taps "Share My Number" and the webhook normalizer pulled it from
+            # the contact field. Don't overwrite an existing phone with None.
+            if inbound.phone_number:
+                customer.phone_number = inbound.phone_number
         await self.db.flush()
         return customer

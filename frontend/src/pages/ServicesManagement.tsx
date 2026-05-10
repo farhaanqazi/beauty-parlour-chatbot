@@ -309,11 +309,23 @@ export default function ServicesManagement() {
         {/* Services grid */}
         {filteredServices.length > 0 ? (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
-            {filteredServices.map((service) => (
+            {filteredServices.map((service) => {
+              const inactive = !service.is_active;
+              return (
               <div
                 key={service.id}
-                className="bg-white rounded-2xl border border-neutral-200 p-6 shadow-sm hover:shadow-md transition-shadow group"
+                aria-disabled={inactive}
+                className={`relative bg-white rounded-2xl border p-6 shadow-sm transition-shadow group ${
+                  inactive
+                    ? 'border-neutral-200 opacity-60 grayscale'
+                    : 'border-neutral-200 hover:shadow-md'
+                }`}
               >
+                {inactive && (
+                  <span className="absolute top-3 left-3 px-2 py-0.5 rounded-full bg-neutral-200 text-neutral-600 text-[10px] font-bold uppercase tracking-wider">
+                    Inactive
+                  </span>
+                )}
                 <div className="flex items-start justify-between mb-3">
                   <div className="flex-1 min-w-0">
                     <h3 className="text-lg font-bold text-neutral-900 truncate">{service.name}</h3>
@@ -322,10 +334,10 @@ export default function ServicesManagement() {
                   <button
                     onClick={() => handleToggleActive(service.id, service.is_active)}
                     title={service.is_active ? 'Deactivate' : 'Activate'}
-                    className={`ml-3 p-1.5 rounded-lg transition ${
+                    className={`ml-3 p-1.5 rounded-lg transition cursor-pointer ${
                       service.is_active
-                        ? 'bg-emerald-100 text-emerald-600'
-                        : 'bg-neutral-100 text-neutral-400'
+                        ? 'bg-emerald-100 text-emerald-600 hover:bg-emerald-200'
+                        : 'bg-neutral-100 text-neutral-400 hover:bg-neutral-200'
                     }`}
                   >
                     {service.is_active ? <ToggleRight className="w-6 h-6" /> : <ToggleLeft className="w-6 h-6" />}
@@ -358,22 +370,34 @@ export default function ServicesManagement() {
 
                 <div className="flex gap-2">
                   <button
-                    onClick={() => handleEdit(service)}
-                    className="flex-1 flex items-center justify-center gap-1.5 px-3 py-2 bg-blue-50 hover:bg-blue-100 text-blue-700 text-sm font-semibold rounded-lg transition"
+                    onClick={() => !inactive && handleEdit(service)}
+                    disabled={inactive}
+                    title={inactive ? 'Activate the service to edit' : 'Edit service'}
+                    className={`flex-1 flex items-center justify-center gap-1.5 px-3 py-2 text-sm font-semibold rounded-lg transition ${
+                      inactive
+                        ? 'bg-neutral-100 text-neutral-400 cursor-not-allowed'
+                        : 'bg-blue-50 hover:bg-blue-100 text-blue-700'
+                    }`}
                   >
                     <Edit2 className="w-4 h-4" />
                     Edit
                   </button>
                   <button
-                    onClick={() => handleDeleteService(service.id)}
-                    className="flex items-center justify-center px-3 py-2 bg-red-50 hover:bg-red-100 text-red-600 rounded-lg transition"
-                    title="Delete service"
+                    onClick={() => !inactive && handleDeleteService(service.id)}
+                    disabled={inactive}
+                    title={inactive ? 'Activate the service to delete' : 'Delete service'}
+                    className={`flex items-center justify-center px-3 py-2 rounded-lg transition ${
+                      inactive
+                        ? 'bg-neutral-100 text-neutral-400 cursor-not-allowed'
+                        : 'bg-red-50 hover:bg-red-100 text-red-600'
+                    }`}
                   >
                     <Trash2 className="w-4 h-4" />
                   </button>
                 </div>
               </div>
-            ))}
+              );
+            })}
           </div>
         ) : (
           <div className="bg-white rounded-2xl border border-neutral-200 p-14 text-center shadow-sm">

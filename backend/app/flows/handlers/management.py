@@ -139,7 +139,7 @@ async def handle_management(
             engine._advance_step(state, ConversationStep.APPOINTMENT_DATE)
             state.previous_step = ConversationStep.MANAGE_APPOINTMENT_MENU
             # Date and time are already pre-filled from the appointment
-            date_buttons, booked_text = engine._build_date_buttons(salon.timezone, include_back=True)
+            date_buttons, booked_text = await engine._rebuild_date_buttons_with_booked_dates(salon, state=state, services=services, include_back=True)
             return FlowResult(
                 state=state,
                 messages=[

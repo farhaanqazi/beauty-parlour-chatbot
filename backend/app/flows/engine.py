@@ -397,6 +397,51 @@ class ConversationEngine:
                 pass
         return start_hour, end_hour
 
+    async def _rebuild_date_buttons_with_booked_dates(
+        self,
+        salon: Salon,
+        state: ConversationState | None = None,
+        services: Sequence[SalonService] | None = None,
+        include_back: bool = False,
+    ) -> tuple[list[dict[str, str]], str]:
+        start_hour, end_hour = self._get_business_hours(salon)
+        today = datetime.now(ZoneInfo(salon.timezone)).date()
+        fully_booked_dates: set[date] = set()
+        
+        duration_minutes = 60
+        if state and services and state.slots.service_id:
+            selected = self._find_service_by_id(services, state.slots.service_id)
+            if selected and selected.duration_minutes:
+                duration_minutes = selected.duration_minutes
+
+        if self.appointment_service is not None:
+            all_business_hours = set(range(start_hour, end_hour))
+            now = datetime.now(ZoneInfo(salon.timezone))
+            for i in range(7):
+                target_date = today + timedelta(days=i)
+                try:
+                    booked_hours = await self.appointment_service.get_booked_hours_for_date(
+                        salon_id=salon.id,
+                        target_date=target_date,
+                        timezone_name=salon.timezone,
+                        new_service_duration_minutes=duration_minutes,
+                    )
+                    
+                    if target_date == now.date():
+                        for hour in range(start_hour, now.hour + 1):
+                            booked_hours.add(hour)
+                            
+                    if all_business_hours.issubset(booked_hours):
+                        fully_booked_dates.add(target_date)
+                except Exception:
+                    pass
+        
+        return self._build_date_buttons(
+            salon.timezone, 
+            include_back=include_back, 
+            fully_booked_dates=fully_booked_dates
+        )
+
     @staticmethod
     def _build_date_buttons(
         timezone_name: str,
@@ -426,7 +471,7 @@ class ConversationEngine:
                 label = target_date.strftime("%a %d %b")
 
             if fully_booked_dates and target_date in fully_booked_dates:
-                booked_labels.append(f"~{label}~")
+                buttons.append({"label": f"🚫 {label} (Full)", "callback": f"ignore_date_full_{target_date.isoformat()}"})
             else:
                 buttons.append({"label": label, "callback": f"date_{target_date.isoformat()}"})
 
@@ -434,12 +479,8 @@ class ConversationEngine:
             buttons.append({"label": "⬅️ Back", "callback": "go_back"})
         buttons.append({"label": "🔄 Start Over", "callback": "restart_flow"})
 
-        booked_text = (
-            "\n\n❌ *Fully booked:* " + "  ".join(booked_labels)
-            if booked_labels
-            else ""
-        )
-        return buttons, booked_text
+        # Return empty booked_text since fully booked dates are now marked in the buttons themselves
+        return buttons, ""
 
     @staticmethod
     def _build_time_buttons(
@@ -449,20 +490,21 @@ class ConversationEngine:
     ) -> tuple[list[dict[str, str]], str]:
         """Build hourly time-slot buttons from start_hour up to (not including) end_hour.
 
-        Booked hours are excluded from buttons and listed in the returned
-        ``booked_text`` fragment with ~strikethrough~ formatting.
+        Booked hours are excluded from the tappable button list (Calendly pattern)
+        and emitted as read-only context in the returned ``booked_text`` so the
+        user can see *why* the picker is short. No tap, no roundtrip, no Unicode
+        trickery.
 
-        Returns ``(buttons, booked_text)`` — ``booked_text`` is ``""`` when all
-        slots are available.
+        Returns ``(buttons, booked_text)``. ``booked_text`` is ``""`` when every
+        hour is available — caller can append it to the prompt unconditionally.
         """
         buttons: list[dict[str, str]] = []
         booked_labels: list[str] = []
-
         for hour in range(start_hour, end_hour):
             time_obj = time(hour=hour, minute=0)
             label = time_obj.strftime("%I:%M %p").lstrip("0")
             if booked_hours and hour in booked_hours:
-                booked_labels.append(f"~{label}~")
+                booked_labels.append(label)
             else:
                 buttons.append({"label": label, "callback": f"time_{hour:02d}:00"})
 
@@ -470,7 +512,7 @@ class ConversationEngine:
         buttons.append({"label": "🔄 Start Over", "callback": "restart_flow"})
 
         booked_text = (
-            "\n\n⏳ *Already taken:* " + "  ".join(booked_labels)
+            "\n\n🔒 Already booked: " + ", ".join(booked_labels)
             if booked_labels
             else ""
         )

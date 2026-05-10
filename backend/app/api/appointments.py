@@ -89,14 +89,22 @@ async def list_appointments(
     
     # Status filter
     if status:
-        try:
-            status_enum = AppointmentStatus(status.lower())
-            statement = statement.where(Appointment.status == status_enum)
-        except ValueError:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Invalid status. Must be one of: {[s.value for s in AppointmentStatus]}",
-            )
+        status_lower = status.lower()
+        # Meta-status: "cancelled" matches every cancelled_* enum variant
+        if status_lower == "cancelled":
+            cancelled_variants = [
+                s for s in AppointmentStatus if s.value.startswith("cancelled")
+            ]
+            statement = statement.where(Appointment.status.in_(cancelled_variants))
+        else:
+            try:
+                status_enum = AppointmentStatus(status_lower)
+                statement = statement.where(Appointment.status == status_enum)
+            except ValueError:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Invalid status. Must be one of: {[s.value for s in AppointmentStatus]} or 'cancelled' (matches all cancelled_*)",
+                )
 
     # Search filter
     if search:

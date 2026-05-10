@@ -16,10 +16,29 @@ class WebhookService:
         message = payload.get("message") or payload.get("edited_message")
         if message:
             text = message.get("text") or message.get("caption")
-            if text:
-                chat = message.get("chat", {})
-                display_name = " ".join(filter(None, [chat.get("first_name"), chat.get("last_name")])).strip() or None
-                external_user_id = str(chat.get("id"))
+            chat = message.get("chat", {})
+            display_name = " ".join(filter(None, [chat.get("first_name"), chat.get("last_name")])).strip() or None
+            external_user_id = str(chat.get("id"))
+
+            # User tapped the "📱 Share My Number" reply-keyboard button — Telegram
+            # delivers a contact object instead of text. Synthesize a sentinel
+            # text so the conversation engine can intercept and ack.
+            contact = message.get("contact")
+            if contact and contact.get("phone_number"):
+                messages.append(
+                    NormalizedInboundMessage(
+                        salon_slug=salon_slug,
+                        channel=ChannelType.TELEGRAM,
+                        external_user_id=external_user_id,
+                        text="__CONTACT_SHARED__",
+                        raw_payload=payload,
+                        provider_message_id=str(message.get("message_id")),
+                        display_name=display_name,
+                        telegram_chat_id=external_user_id,
+                        phone_number=str(contact["phone_number"]),
+                    )
+                )
+            elif text:
                 messages.append(
                     NormalizedInboundMessage(
                         salon_slug=salon_slug,

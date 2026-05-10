@@ -73,25 +73,14 @@ class RedisStateStore:
             return False
         key = f"msg:{salon_id}:{channel}:{external_user_id}:{message_id}"
         try:
-            exists = await self.redis_client.exists(key)
-            return bool(exists)
+            # Atomic: Set key to "1" if it doesn't exist. If it returns True, it was a new message.
+            # If it returns False/None, the key already existed and is a duplicate.
+            is_new = await self.redis_client.set(key, "1", ex=3600, nx=True)
+            return not is_new
         except Exception:
             return False
 
     async def mark_message_processed(self, salon_id: str, channel: str, external_user_id: str, message_id: str) -> None:
         """Mark a message as processed to prevent duplicate processing."""
-        if not message_id:
-            return
-        key = f"msg:{salon_id}:{channel}:{external_user_id}:{message_id}"
-        try:
-            # Store for 1 hour (enough for webhook retries)
-            await self.redis_client.set(key, "1", ex=3600)
-        except Exception as e:
-            app_logger.error(
-                "Failed to mark message processed",
-                event="redis_error",
-                operation="SET",
-                key=key,
-                error_type=type(e).__name__,
-                error_message=str(e),
-            )
+        # This is now handled atomically by is_message_processed using SETNX.
+        pass

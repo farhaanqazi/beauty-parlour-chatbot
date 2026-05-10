@@ -41,6 +41,9 @@ class FakeEngine:
         buttons.append({"label": "Start Over", "callback": "restart_flow"})
         return buttons, ""
 
+    async def _rebuild_date_buttons_with_booked_dates(self, salon, state=None, services=None, include_back=False):
+        return self._build_date_buttons(salon.timezone, include_back=include_back)
+
     @staticmethod
     def _invalid_reply(state: ConversationState, prompt: str, buttons=None):
         state.attempt_count += 1

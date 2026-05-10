@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from typing import Sequence
 from zoneinfo import ZoneInfo
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -9,6 +10,7 @@ from app.core.config import Settings
 from app.core.enums import ConversationStep, UserIntent
 from app.db.models.appointment import Appointment
 from app.db.models.message import InboundMessage, OutboundMessage
+from app.db.models.salon import Salon, SalonService
 from app.flows.engine import ConversationEngine
 from app.llm.service import LLMService
 from app.messaging.dispatcher import MessageDispatcher
@@ -43,6 +45,39 @@ class ConversationService:
             appointment_service=self.appointment_service,
         )
         self.tenant_service = TenantService(db)
+
+    async def _build_time_picker(
+        self,
+        state: ConversationState,
+        salon: Salon,
+        services: Sequence[SalonService],
+    ) -> tuple[list[dict[str, str]], str]:
+        """Build the APPOINTMENT_TIME picker for the conflict re-prompt path.
+        Returns ``(buttons, booked_text)`` — buttons are only available hours;
+        booked_text is the read-only "🔒 Already booked: ..." line for the
+        message body.
+        """
+        start_hour, end_hour = self.engine._get_business_hours(salon)
+        selected = self.engine._find_service_by_id(services, state.slots.service_id)
+        duration_minutes = (
+            selected.duration_minutes
+            if selected and selected.duration_minutes
+            else 60
+        )
+        booked_hours: set[int] | None = None
+        if state.slots.appointment_date:
+            try:
+                booked_hours = await self.appointment_service.get_booked_hours_for_date(
+                    salon_id=salon.id,
+                    target_date=state.slots.appointment_date,
+                    timezone_name=salon.timezone,
+                    new_service_duration_minutes=duration_minutes,
+                )
+            except Exception:
+                booked_hours = None
+        return self.engine._build_time_buttons(
+            start_hour, end_hour, booked_hours=booked_hours
+        )
 
     async def handle_inbound(self, inbound: NormalizedInboundMessage) -> ProcessResult:
         app_logger.info(
@@ -156,6 +191,24 @@ class ConversationService:
                     external_user_id=inbound.external_user_id,
                     current_step=state.current_step if hasattr(state, "current_step") else "unknown",
                 )
+
+            # --- TELEGRAM "Share My Number" INTERCEPT ---
+            # The webhook normalizer emits __CONTACT_SHARED__ when the user taps
+            # the request_contact reply-keyboard button. Phone is already saved
+            # by upsert_customer; we just ack and return without disturbing state.
+            if inbound.text == "__CONTACT_SHARED__":
+                if state and inbound.phone_number:
+                    state.slots.phone_number = inbound.phone_number
+                    state.updated_at = datetime.now(timezone.utc)
+                    await self.state_store.save_state(state)
+                await self.db.commit()
+                ack = OutboundInstruction(text="Thanks! Got your number. ✅")
+                await self.dispatcher.send_instruction(
+                    channel_config=channel_config,
+                    destination=inbound.external_user_id,
+                    instruction=ack,
+                )
+                return ProcessResult(processed_messages=1, outbound_messages=[ack.text])
 
             # Capture the step before processing to know where we started
             step_before_process = state.step if state else None
@@ -284,32 +337,14 @@ class ConversationService:
                     
                     # Override the transition and revert to APPOINTMENT_TIME
                     result.state.step = ConversationStep.APPOINTMENT_TIME
-                    
-                    # Generate time slots based on salon business hours
-                    start_hour, end_hour = 9, 18
-                    if hasattr(salon, 'business_hours') and salon.business_hours:
-                        try:
-                            hours_str = str(salon.business_hours)
-                            if '-' in hours_str:
-                                s_str, e_str = hours_str.split('-')
-                                start_hour = int(s_str.split(':')[0])
-                                end_hour = int(e_str.split(':')[0])
-                        except (ValueError, AttributeError):
-                            pass
-                            
-                    time_buttons = []
-                    for hour in range(start_hour, end_hour):
-                        from datetime import time as dt_time
-                        time_obj = dt_time(hour=hour, minute=0)
-                        label = time_obj.strftime("%I:%M %p").lstrip('0')
-                        time_buttons.append({"label": label, "callback": f"time_{hour:02d}:00"})
-                    time_buttons.append({"label": "⬅️ Back", "callback": "go_back"})
-                    time_buttons.append({"label": "🔄 Start Over", "callback": "restart_flow"})
-                        
+
+                    time_buttons, booked_text = await self._build_time_picker(
+                        result.state, salon, active_services
+                    )
                     result.messages = [
                         OutboundInstruction(text=error_message),
                         OutboundInstruction(
-                            text="Please choose a different time:",
+                            text="Please choose a different time:" + booked_text,
                             buttons=time_buttons,
                         ),
                     ]
@@ -317,14 +352,21 @@ class ConversationService:
 
             booking_reference: str | None = None
             instructions = result.messages
-            if result.state.slots.language:
+            customer_dirty = False
+            if result.state.slots.language and customer.preferred_language != result.state.slots.language:
                 customer.preferred_language = result.state.slots.language
-            # Persist email and phone number collected during booking back to the customer row
-            if result.state.slots.email:
+                customer_dirty = True
+            if result.state.slots.email and customer.email != result.state.slots.email:
                 customer.email = result.state.slots.email
+                customer_dirty = True
             if result.state.slots.phone_number and not customer.phone_number:
                 # Only write phone if it wasn't already captured from the channel (WhatsApp)
                 customer.phone_number = result.state.slots.phone_number
+                customer_dirty = True
+            # Commit contact info immediately so a later crash in the same session
+            # (e.g., during CONFIRMATION render) doesn't roll back the assignment.
+            if customer_dirty:
+                await self.db.commit()
 
             # --- CANCELLATION INTERCEPT ---
             if result.should_cancel_appointment and result.state.target_appointment_id:
@@ -544,16 +586,13 @@ class ConversationService:
                     else:
                         # Slot booked or other time conflict - reset to time selection
                         result.state.step = ConversationStep.APPOINTMENT_TIME
-                        # Generate hourly time slots (9 AM - 6 PM)
-                        time_buttons = []
-                        for hour in range(9, 18):
-                            time_obj = datetime.strptime(f"{hour:02d}:00", "%H:%M").time()
-                            label = time_obj.strftime("%I:%M %p").lstrip('0')
-                            time_buttons.append({"label": label, "callback": f"time_{hour:02d}:00"})
+                        time_buttons, booked_text = await self._build_time_picker(
+                            result.state, salon, active_services
+                        )
                         instructions = [
                             OutboundInstruction(text=error_message),
                             OutboundInstruction(
-                                text="Please choose a different time:",
+                                text="Please choose a different time:" + booked_text,
                                 buttons=time_buttons,
                             ),
                         ]

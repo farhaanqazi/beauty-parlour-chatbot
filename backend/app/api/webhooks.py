@@ -112,21 +112,6 @@ async def receive_whatsapp_webhook(
         normalized_messages = WebhookService.normalize_whatsapp_update(salon_slug, payload)
         results: list[ProcessResult] = []
         for message in normalized_messages:
-            # Idempotency: skip if this provider message was already processed for this salon
-            if message.provider_message_id:
-                exists_stmt = select(InboundMessage.id).where(
-                    InboundMessage.provider_message_id == message.provider_message_id,
-                    InboundMessage.salon_id == salon.id,
-                ).limit(1)
-                exists_result = await db.execute(exists_stmt)
-                if exists_result.first():
-                    app_logger.info(
-                        "Skipping duplicate WhatsApp message",
-                        event="webhook_dedup",
-                        channel="whatsapp",
-                        provider_message_id=message.provider_message_id,
-                    )
-                    continue
             results.append(await conversation_service.handle_inbound(message))
         app_logger.info(
             "WhatsApp webhook processed",
@@ -209,6 +194,63 @@ async def receive_telegram_webhook(
     except json.JSONDecodeError:
         raise HTTPException(status_code=400, detail="Invalid JSON body")
 
+    # Acknowledge callback queries immediately to stop the loading spinner
+    callback_query = payload.get("callback_query")
+    if callback_query and bot_token:
+        callback_query_id = callback_query.get("id")
+        if callback_query_id:
+            import httpx
+            import asyncio
+            async def _answer_cb(token: str, cb_id: str, cb_data: str | None = None, cb_msg: dict | None = None):
+                try:
+                    cb_payload = {"callback_query_id": cb_id}
+                    edit_req = None
+                    if cb_data and cb_data.startswith("ignore_date_full"):
+                        cb_payload["text"] = "This date is fully booked. Please choose an available date."
+                        cb_payload["show_alert"] = True
+                        
+                        # Find the button and edit its text to highlight it was clicked
+                        if cb_msg and "reply_markup" in cb_msg and "inline_keyboard" in cb_msg["reply_markup"]:
+                            reply_markup = cb_msg["reply_markup"]
+                            inline_keyboard = reply_markup["inline_keyboard"]
+                            changed = False
+                            for row in inline_keyboard:
+                                for btn in row:
+                                    if btn.get("callback_data") == cb_data and "⚠️" not in btn.get("text", ""):
+                                        # Change emoji to highlight it
+                                        old_text = btn["text"].replace("🚫 ", "")
+                                        btn["text"] = f"⚠️ {old_text} ⚠️"
+                                        changed = True
+                            
+                            if changed:
+                                chat_id = cb_msg.get("chat", {}).get("id")
+                                message_id = cb_msg.get("message_id")
+                                if chat_id and message_id:
+                                    edit_req = {
+                                        "chat_id": chat_id,
+                                        "message_id": message_id,
+                                        "reply_markup": reply_markup
+                                    }
+
+                    async with httpx.AsyncClient() as client:
+                        # Answer the callback query to stop the loading spinner and show the toast/alert
+                        await client.post(
+                            f"https://api.telegram.org/bot{token}/answerCallbackQuery",
+                            json=cb_payload,
+                            timeout=5.0
+                        )
+                        # If we modified the button, update the message
+                        if edit_req:
+                            await client.post(
+                                f"https://api.telegram.org/bot{token}/editMessageReplyMarkup",
+                                json=edit_req,
+                                timeout=5.0
+                            )
+                except Exception as e:
+                    app_logger.warning(f"Failed to answer callback query: {e}")
+            
+            asyncio.create_task(_answer_cb(bot_token, callback_query_id, callback_query.get("data"), callback_query.get("message")))
+
     app_logger.info(
         "Telegram webhook received",
         event="webhook_received",
@@ -220,21 +262,6 @@ async def receive_telegram_webhook(
         normalized_messages = WebhookService.normalize_telegram_update(salon_slug, payload)
         results: list[ProcessResult] = []
         for message in normalized_messages:
-            # Idempotency: skip if this provider message was already processed for this salon
-            if message.provider_message_id:
-                exists_stmt = select(InboundMessage.id).where(
-                    InboundMessage.provider_message_id == message.provider_message_id,
-                    InboundMessage.salon_id == salon.id,
-                ).limit(1)
-                exists_result = await db.execute(exists_stmt)
-                if exists_result.first():
-                    app_logger.info(
-                        "Skipping duplicate Telegram message",
-                        event="webhook_dedup",
-                        channel="telegram",
-                        provider_message_id=message.provider_message_id,
-                    )
-                    continue
             results.append(await conversation_service.handle_inbound(message))
         app_logger.info(
             "Telegram webhook processed",

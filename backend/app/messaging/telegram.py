@@ -51,7 +51,16 @@ class TelegramTransport(MessagingTransport):
             }
 
             # Add inline keyboard buttons if present
-            if instruction.buttons:
+            if instruction.request_contact:
+                # Reply-keyboard with a single button that triggers Telegram's
+                # native "Share contact" prompt. one_time_keyboard hides it
+                # after the user responds. Mutually exclusive with inline buttons.
+                payload["reply_markup"] = {
+                    "keyboard": [[{"text": "📱 Share My Number", "request_contact": True}]],
+                    "one_time_keyboard": True,
+                    "resize_keyboard": True,
+                }
+            elif instruction.buttons:
                 app_logger.info(f"Telegram sending message with {len(instruction.buttons)} buttons: {[btn['label'] for btn in instruction.buttons]}")
                 # One button per row — full width, nothing gets clipped on mobile
                 keyboard = [

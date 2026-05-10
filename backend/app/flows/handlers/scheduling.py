@@ -190,6 +190,34 @@ async def handle_scheduling(
     if cleaned_text.startswith("ignore_date_full"):
         return FlowResult(state=state, messages=[]), state_was_reset
 
+    # Week-group expansion: "month_week_YYYY_MM_startday_endday"
+    # When user taps a week button, show individual days for that week only.
+    if cleaned_text.startswith("month_week_") and state.step == ConversationStep.APPOINTMENT_DATE:
+        try:
+            _, _, _yr, _mo, _sd, _ed = cleaned_text.split("_")
+            _yr, _mo, _sd, _ed = int(_yr), int(_mo), int(_sd), int(_ed)
+            _today_w = datetime.now(ZoneInfo(salon.timezone)).date()
+            _max_w = _today_w + timedelta(days=90)
+            _month_name_w = date(_yr, _mo, 1).strftime("%B %Y")
+            _day_btns: list[dict[str, str]] = []
+            for _dd in range(_sd, _ed + 1):
+                _cand = date(_yr, _mo, _dd)
+                if _cand >= _today_w and _cand <= _max_w:
+                    _day_btns.append({
+                        "label": _cand.strftime("%a %d"),
+                        "callback": f"date_{_cand.isoformat()}",
+                    })
+            _day_btns.append({"label": "\U0001f504 Start Over", "callback": "restart_flow"})
+            return FlowResult(
+                state=state,
+                messages=[OutboundInstruction(
+                    text=f"\U0001f4c5 Pick a day in *{_month_name_w}*:\n\U0001f4a1 Or type the day number (e.g. *{_sd}*)",
+                    buttons=_day_btns,
+                )],
+            ), state_was_reset
+        except (ValueError, IndexError):
+            pass  # Malformed callback — fall through to normal handling
+
     if state.step == ConversationStep.APPOINTMENT_DATE:
         # Handle button callback (date_YYYY-MM-DD format)
         if cleaned_text.startswith("date_"):
@@ -220,7 +248,60 @@ async def handle_scheduling(
                     "sep": 9, "oct": 10, "nov": 11, "dec": 12,
                 }
                 _cleaned_lower = cleaned_text.lower().strip()
-                if _cleaned_lower in MONTH_MAP:
+
+                # --- Context-aware day resolution ---
+                # If we previously asked "Which date in August?" and the user types "23",
+                # resolve it as August 23 using the pending_month_year stored in metadata.
+                _pending = state.metadata.get("pending_month_year")
+                if _pending and re.match(r'^\d{1,2}$', _cleaned_lower):
+                    import calendar as _cal
+                    _day = int(_cleaned_lower)
+                    _p_month, _p_year = _pending["month"], _pending["year"]
+                    _last = _cal.monthrange(_p_year, _p_month)[1]
+                    if 1 <= _day <= _last:
+                        _candidate = date(_p_year, _p_month, _day)
+                        _today_ctx = datetime.now(ZoneInfo(salon.timezone)).date()
+                        _max_ctx = _today_ctx + timedelta(days=90)
+                        if _candidate >= _today_ctx and _candidate <= _max_ctx:
+                            appointment_date = _candidate
+                            state.metadata.pop("pending_month_year", None)
+                        else:
+                            # Day is out of valid range — give a helpful message
+                            _month_name_ctx = date(_p_year, _p_month, 1).strftime("%B %Y")
+                            return FlowResult(
+                                state=state,
+                                messages=[OutboundInstruction(
+                                    text=f"Sorry, {_p_year}-{_p_month:02d}-{_day:02d} is outside the booking window. "
+                                         f"Please pick an available date in *{_month_name_ctx}*:",
+                                    buttons=[
+                                        {"label": _d2.strftime("%a %d"), "callback": f"date_{_d2.isoformat()}"}
+                                        for _d2 in (
+                                            date(_p_year, _p_month, d)
+                                            for d in range(1, _last + 1)
+                                            if _today_ctx <= date(_p_year, _p_month, d) <= _max_ctx
+                                        )
+                                    ] + [{"label": "\U0001f504 Start Over", "callback": "restart_flow"}],
+                                )],
+                            ), state_was_reset
+                    else:
+                        # Invalid day number for that month
+                        _month_name_ctx = date(_pending["year"], _pending["month"], 1).strftime("%B %Y")
+                        return FlowResult(
+                            state=state,
+                            messages=[OutboundInstruction(
+                                text=f"*{_cleaned_lower}* is not a valid day in {_month_name_ctx}. Please pick a date:",
+                                buttons=[
+                                    {"label": _d2.strftime("%a %d"), "callback": f"date_{_d2.isoformat()}"}
+                                    for _d2 in (
+                                        date(_pending["year"], _pending["month"], d)
+                                        for d in range(1, _last + 1)
+                                        if datetime.now(ZoneInfo(salon.timezone)).date() <= date(_pending["year"], _pending["month"], d)
+                                    )
+                                ] + [{"label": "\U0001f504 Start Over", "callback": "restart_flow"}],
+                            )],
+                        ), state_was_reset
+
+                elif _cleaned_lower in MONTH_MAP:
                     import calendar
                     month_num = MONTH_MAP[_cleaned_lower]
                     _now = datetime.now(ZoneInfo(salon.timezone))
@@ -253,33 +334,58 @@ async def handle_scheduling(
                             ],
                         ), state_was_reset
 
-                    # Build per-day buttons for that month (future dates within 90 days)
+                    # Build week-group buttons instead of 31 individual day buttons
+                    import calendar
                     _last_day = calendar.monthrange(_year, month_num)[1]
                     _month_end = date(_year, month_num, _last_day)
                     _effective_end = min(_month_end, _max_date)
                     _start_day = max(_month_start, _today)
 
-                    _day_buttons: list[dict[str, str]] = []
+                    # Group available days into ISO weeks, emit one button per week
+                    _week_buttons: list[dict[str, str]] = []
+                    _seen_weeks: set[int] = set()
                     _d = _start_day
                     while _d <= _effective_end:
-                        _day_buttons.append({
-                            "label": _d.strftime("%a %d"),
-                            "callback": f"date_{_d.isoformat()}",
-                        })
+                        _wk = _d.isocalendar()[1]
+                        if _wk not in _seen_weeks:
+                            # Compute the last day of that week still in range
+                            _week_start = _d
+                            _week_end = _d
+                            _tmp = _d
+                            while _tmp <= _effective_end and _tmp.isocalendar()[1] == _wk:
+                                _week_end = _tmp
+                                _tmp += timedelta(days=1)
+                            _seen_weeks.add(_wk)
+                            # Use the first available day of this week as the callback
+                            _week_buttons.append({
+                                "label": f"{_week_start.day}–{_week_end.day} {_week_end.strftime('%b')}",
+                                "callback": f"month_week_{_year}_{month_num:02d}_{_week_start.day:02d}_{_week_end.day:02d}",
+                            })
                         _d += timedelta(days=1)
-                    _day_buttons.append({"label": "\U0001f504 Start Over", "callback": "restart_flow"})
+                    _week_buttons.append({"label": "\U0001f504 Start Over", "callback": "restart_flow"})
+
+                    # Store pending month so the user can type just "23" next
+                    state.metadata["pending_month_year"] = {"month": month_num, "year": _year}
 
                     return FlowResult(
                         state=state,
                         messages=[OutboundInstruction(
-                            text=f"\U0001f4c5 Which date in *{_month_name_full}* would you like to book?",
-                            buttons=_day_buttons,
+                            text=(
+                                f"\U0001f4c5 *{_month_name_full}* — which week suits you?\n"
+                                f"\U0001f4a1 Or just type the day number (e.g. *23*)"
+                            ),
+                            buttons=_week_buttons,
                         )],
                     ), state_was_reset
 
-                appointment_date = await engine._parse_date(
-                    cleaned_text, salon.timezone, state.slots.language
-                )
+                if not _pending:  # only parse if we didn't already resolve via pending context
+                    appointment_date = await engine._parse_date(
+                        cleaned_text, salon.timezone, state.slots.language
+                    )
+                elif appointment_date is None:
+                    appointment_date = await engine._parse_date(
+                        cleaned_text, salon.timezone, state.slots.language
+                    )
 
         if not appointment_date:
             # First, check if this is a FAQ question (LLM fallback)

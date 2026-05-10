@@ -94,6 +94,93 @@ class ConversationEngine:
             # Re-process this step by falling through to the step handler below
             # We'll let the step handlers below generate the appropriate response
 
+        # ── Global slot pre-fill ─────────────────────────────────────────────
+        # Run an LLM slot-extractor on every free-text message (not button
+        # callbacks).  Any slots that are CLEARLY mentioned get written into
+        # state immediately so the step handlers can skip them.
+        # Examples:
+        #   "I want a facial on aug 23 at 3pm" → fills service + date + time
+        #   "book for Farhaan, 9876543210"     → fills customer_name + phone
+        # Button callbacks are skipped (they start with known prefixes or are
+        # short tokens handled by the step machines directly).
+        _is_free_text = (
+            not state_was_reset
+            and not cleaned_text.startswith("date_")
+            and not cleaned_text.startswith("time_")
+            and not cleaned_text.startswith("svc_")
+            and not cleaned_text.startswith("ignore_date_full")
+            and cleaned_text not in {
+                "date_confirm_yes", "date_confirm_no",
+                "time_confirm_yes", "time_confirm_no",
+                "confirm_yes", "confirm_no",
+                "action_book_new", "action_reschedule", "action_cancel",
+                "action_keep", "restart_flow", "go_back",
+                "lang_english", "lang_hindi", "lang_hinglish",
+                "change_phone", "action_skip_email",
+            }
+            and state.step not in {
+                ConversationStep.GREETING,
+                ConversationStep.CONFIRMATION,
+                ConversationStep.COMPLETE,
+            }
+            and len(cleaned_text) > 2
+        )
+        if _is_free_text and self.llm_service.client:
+            from datetime import date as _today_date
+            from zoneinfo import ZoneInfo as _ZI
+            _ref_date = __import__("datetime").datetime.now(_ZI(salon.timezone)).date()
+            _service_names = [svc.name for svc in services]
+            try:
+                _extracted = await self.llm_service.extract_slots(
+                    cleaned_text,
+                    service_names=_service_names,
+                    timezone_name=salon.timezone,
+                    reference_date=_ref_date,
+                    language=state.slots.language,
+                )
+            except Exception:
+                _extracted = {}
+
+            if _extracted:
+                # Pre-fill service slot
+                if "service_name" in _extracted and not state.slots.service_id:
+                    _matched_svc = next(
+                        (svc for svc in services
+                         if _extracted["service_name"].lower() in svc.name.lower()
+                         or svc.name.lower() in _extracted["service_name"].lower()),
+                        None,
+                    )
+                    if _matched_svc:
+                        state.slots.service_id = str(_matched_svc.id)
+                        state.slots.service_name = _matched_svc.name
+
+                # Pre-fill date slot
+                if "date" in _extracted and not state.slots.appointment_date:
+                    try:
+                        from datetime import date as _d
+                        state.slots.appointment_date = _d.fromisoformat(_extracted["date"])
+                    except (ValueError, TypeError):
+                        pass
+
+                # Pre-fill time slot
+                if "time" in _extracted and not state.slots.appointment_time:
+                    try:
+                        from datetime import time as _t
+                        _parts = _extracted["time"].split(":")
+                        if len(_parts) == 2:
+                            state.slots.appointment_time = _t(int(_parts[0]), int(_parts[1]))
+                    except (ValueError, TypeError):
+                        pass
+
+                # Pre-fill name slot
+                if "customer_name" in _extracted and not state.slots.customer_name:
+                    state.slots.customer_name = _extracted["customer_name"]
+
+                # Pre-fill phone slot
+                if "phone" in _extracted and not state.slots.phone_number:
+                    state.slots.phone_number = _extracted["phone"]
+        # ── End global slot pre-fill ─────────────────────────────────────────
+
         # Dispatch to focused step handlers — all helpers remain on ConversationEngine.
         for _handler in (handle_booking, handle_scheduling, handle_management):
             _result = await _handler(
@@ -107,6 +194,7 @@ class ConversationEngine:
             messages=[OutboundInstruction(text="Reply HI to start a new booking.")],
             clear_state=True,
         ), state_was_reset
+
 
     async def _resolve_choice(
         self,

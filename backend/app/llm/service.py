@@ -161,6 +161,77 @@ class LLMService:
         iso_time = payload.get("iso_time")
         return str(iso_time) if iso_time else None
 
+    async def extract_slots(
+        self,
+        message: str,
+        service_names: list[str],
+        timezone_name: str,
+        reference_date: date,
+        language: str | None = None,
+    ) -> dict[str, Any]:
+        """Extract any booking slots mentioned in a free-form message.
+
+        Returns a dict with any of these keys (only if confidently extracted):
+          - service_name: str  (matched against service_names list)
+          - date: str          (YYYY-MM-DD)
+          - time: str          (HH:MM, 24-hour)
+          - customer_name: str
+          - phone: str
+
+        Empty dict means nothing was confidently extractable.
+        """
+        if not self.client:
+            return {}
+
+        sanitized_msg, _ = sanitize_llm_input(message)
+
+        payload = await self._json_completion(
+            system_prompt=(
+                "You are a booking assistant slot extractor for a beauty salon. "
+                "Extract booking information from the user message. "
+                "Return JSON with ONLY the slots that are clearly mentioned (omit uncertain ones). "
+                "Keys: service_name (str, must be from the services list or null), "
+                "date (YYYY-MM-DD or null), time (HH:MM 24-hour or null), "
+                "customer_name (str or null), phone (digits only, 10+ chars, or null). "
+                f"Today is {reference_date.isoformat()} in timezone {timezone_name}. "
+                "For relative dates: 'tomorrow' = today+1, 'next Monday' = next week's Monday. "
+                "For ambiguous times: single digits like '3' or '4' = PM (15:00/16:00). "
+                "IMPORTANT: Only extract what is CLEARLY stated. Do NOT guess. "
+                "If a slot is ambiguous or not mentioned, set it to null."
+            ),
+            user_prompt=(
+                f"Available services: {', '.join(service_names)}\n"
+                f"User language: {language or 'english'}\n"
+                f"User message: {sanitized_msg}"
+            ),
+        )
+        if not isinstance(payload, dict):
+            return {}
+
+        result: dict[str, Any] = {}
+        if payload.get("service_name") and any(
+            payload["service_name"].lower() in s.lower() or s.lower() in payload["service_name"].lower()
+            for s in service_names
+        ):
+            result["service_name"] = payload["service_name"]
+        if payload.get("date"):
+            try:
+                from datetime import date as _date
+                _d = _date.fromisoformat(str(payload["date"]))
+                if _d >= reference_date:
+                    result["date"] = str(payload["date"])
+            except (ValueError, TypeError):
+                pass
+        if payload.get("time"):
+            result["time"] = str(payload["time"])
+        if payload.get("customer_name") and len(str(payload["customer_name"]).split()) <= 5:
+            result["customer_name"] = str(payload["customer_name"])
+        if payload.get("phone"):
+            _phone = re.sub(r"\D", "", str(payload["phone"]))
+            if len(_phone) >= 10:
+                result["phone"] = _phone
+        return result
+
     async def localize_text(self, text: str, target_language: str | None) -> str:
         if not target_language or target_language == "english":
             return text

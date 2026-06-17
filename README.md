@@ -1,289 +1,188 @@
-# Beauty Parlour Chatbot
+# Beauty Parlour Management System & AI Chatbot
 
-A full-stack salon booking and management system for beauty parlours. The project combines a FastAPI backend for chatbot-driven appointment booking with a React dashboard for staff and owners.
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+![Python](https://img.shields.io/badge/Python-3.10+-0377cc.svg?logo=python&logoColor=white)
+![React](https://img.shields.io/badge/React-19-20232A.svg?logo=react&logoColor=61DAFB)
+![TypeScript](https://img.shields.io/badge/TypeScript-007ACC.svg?logo=typescript&logoColor=white)
+![Vite](https://img.shields.io/badge/Vite-B73BA5.svg?logo=vite&logoColor=FFD62E)
+![Tailwind](https://img.shields.io/badge/Tailwind-v4-38B2AC.svg?logo=tailwind-css&logoColor=white)
+![FastAPI](https://img.shields.io/badge/FastAPI-009688.svg?logo=fastapi&logoColor=white)
+![Database](https://img.shields.io/badge/Database-PostgreSQL-316192.svg?logo=postgresql&logoColor=white)
+![Deploy](https://img.shields.io/badge/Deploy-Supabase-3ECF8E.svg?logo=supabase&logoColor=white)
+![Redis](https://img.shields.io/badge/Cache-Redis-DC382D.svg?logo=redis&logoColor=white)
+![Groq](https://img.shields.io/badge/LLM-Groq-f55036.svg)
 
-## What It Does
+**A next-generation full-stack salon booking and management platform powered by LLMs.**
 
-- Handles appointment booking through Telegram and WhatsApp webhooks.
-- Stores live chat sessions in Redis and persistent salon data in PostgreSQL/Supabase.
-- Uses a deterministic booking flow, with Groq LLM support for language localization, free-text understanding, option matching, and date/time extraction fallback.
-- Supports multi-tenant salons with per-salon services, channel configuration, notification contacts, and dashboard users.
-- Provides a role-based dashboard for `admin`, `salon_owner`, and `reception` users.
-- Tracks appointments, services, customers, users, KPIs, revenue trends, appointment analytics, staff utilization, and customer analytics.
-- Runs background workers for reminders, cancellation notices, salon digests, and appointment lifecycle updates.
+---
 
-## Tech Stack
+## 📖 Overview
 
-### Backend
+The **Beauty Parlour Chatbot** is an all-in-one salon management ecosystem designed for modern beauty parlours. It features a **Groq LLM-powered chatbot** that autonomously handles appointment bookings through **Telegram** and **WhatsApp** webhooks, paired with a sleek **React dashboard** for staff, receptionists, and salon owners to manage daily operations.
 
-- FastAPI
-- SQLAlchemy 2.x async ORM
-- PostgreSQL/Supabase
-- Redis
-- Alembic migrations
-- Groq LLM API
-- Telegram and WhatsApp channel adapters
+From natural language understanding and multi-tenant support, to advanced analytics and role-based access, this system dramatically reduces administrative overhead and ensures a seamless customer booking experience.
+
+## ✨ Key Features
+
+- 🤖 **AI-Powered Chatbot**: Utilizes Groq LLM for language localization, free-text understanding, date/time extraction, and deterministic appointment scheduling.
+- 📱 **Multi-Channel Integration**: Supports seamless booking flows through Telegram and WhatsApp webhooks.
+- 🏢 **Multi-Tenant Architecture**: Robust support for multiple salons, allowing per-salon services, unique channels, notifications, and tailored dashboard experiences.
+- 🔐 **Role-Based Access Control (RBAC)**: Distinct permissions for `admin`, `salon_owner`, and `reception` workflows powered by Supabase Auth.
+- 📊 **Advanced Analytics Dashboard**: Track live appointments, staff utilization, revenue trends, customer KPIs, and service popularity in real-time.
+- 🔄 **Real-Time State Management**: Chat sessions are persisted in Redis, while salon data is reliably stored in PostgreSQL/Supabase.
+- ⚡ **Background Processing**: Dedicated workers handle automated reminders, cancellation notices, salon digests, and lifecycle state transitions.
+
+## 🛠️ Tech Stack
 
 ### Frontend
+- **Framework**: React 19 + TypeScript + Vite
+- **Styling**: Tailwind CSS v4, Framer Motion
+- **State Management**: Zustand, TanStack React Query
+- **Authentication**: Supabase Auth
+- **Icons**: Lucide React
+- **Network**: Axios
 
-- React 19
-- TypeScript
-- Vite
-- Tailwind CSS v4
-- TanStack React Query
-- Zustand
-- Axios
-- Supabase Auth
-- Framer Motion / `motion`
-- Lucide React icons
+### Backend
+- **Framework**: FastAPI (Python 3.10+)
+- **Database**: PostgreSQL (via Supabase), SQLAlchemy 2.x Async ORM, Alembic Migrations
+- **Cache & Session**: Redis
+- **AI / LLM**: Groq API
+- **Channels**: Telegram & WhatsApp Business API adapters
 
-## Repository Layout
+---
+
+## 📂 Repository Layout
 
 ```text
 beauty_parlour_chatbot/
-  backend/
-    app/
-      api/          FastAPI routes for webhooks, appointments, analytics, users, salons, customers
-      core/         settings, enums, logging config
-      db/           SQLAlchemy session and models
-      flows/        rule-based conversation engine and handlers
-      llm/          Groq adapter
-      messaging/    Telegram and WhatsApp adapters
-      middleware/   request ID, timing, rate limiting, security headers, exception handling
-      redis/        Redis client and conversation state store
-      services/     appointment, tenant, webhook, notification, email, conversation services
-      workers/      notification and lifecycle worker processes
-    alembic/        Alembic migration setup
-    sql/            baseline SQL, demo seed data, verification and legacy migration scripts
-    tests/          backend tests
-  frontend/
-    src/
-      components/   shared UI, auth, appointments, analytics, customers, dashboard components
-      hooks/        data and UI hooks
-      pages/        app routes and dashboard pages
-      services/     API clients and Supabase client
-      store/        Zustand auth and theme stores
-      types/        shared TypeScript types
-  start_backend.bat Windows shortcut for starting the backend
+├── backend/                  # FastAPI Application
+│   ├── alembic/              # Database migration configuration
+│   ├── app/
+│   │   ├── api/              # Route definitions (webhooks, appointments, users)
+│   │   ├── core/             # Configuration & security settings
+│   │   ├── db/               # SQLAlchemy models and session management
+│   │   ├── flows/            # Conversational state machine
+│   │   ├── llm/              # Groq adapter logic
+│   │   ├── messaging/        # Telegram & WhatsApp adapters
+│   │   ├── middleware/       # Rate limiting, security, request ID tracking
+│   │   ├── redis/            # Redis connection pooling & session management
+│   │   ├── services/         # Core business logic
+│   │   └── workers/          # Background tasks for notifications
+│   ├── sql/                  # Baseline schema and demo seed scripts
+│   └── tests/                # Pytest suites
+│
+├── frontend/                 # React SPA Dashboard
+│   └── src/
+│       ├── components/       # Reusable UI elements & views
+│       ├── hooks/            # Custom React hooks (Data & UI)
+│       ├── pages/            # Dashboard routes
+│       ├── services/         # API clients
+│       ├── store/            # Zustand stores
+│       └── types/            # Global TypeScript interfaces
+│
+└── start_backend.bat         # Quickstart script for Windows
 ```
 
-## Main Backend Endpoints
+---
 
-The API is mounted under `/api/v1`.
+## 🚀 Getting Started
 
-- `POST /api/v1/webhooks/telegram/{salon_slug}`
-- `GET /api/v1/webhooks/whatsapp/{salon_slug}`
-- `POST /api/v1/webhooks/whatsapp/{salon_slug}`
-- `GET /api/v1/salons/{salon_slug}/entry-links`
-- `GET /api/v1/appointments`
-- `POST /api/v1/appointments`
-- `PATCH /api/v1/appointments/{appointment_id}/status`
-- `POST /api/v1/appointments/{appointment_id}/cancel`
-- `GET /api/v1/salons`
-- `GET /api/v1/users`
-- `GET /api/v1/customers`
-- `GET /api/v1/analytics/kpis`
-- `GET /api/v1/analytics/revenue/trends`
+### Prerequisites
 
-Health checks:
+- **Node.js**: v18+
+- **Python**: v3.10+
+- **Database**: PostgreSQL / Supabase project
+- **Cache**: Redis server
+- **APIs**: Groq API Key, Telegram Bot Credentials, WhatsApp Business API credentials
 
-- `GET /health`
-- `GET /health/ready`
+### 1. Backend Setup
 
-FastAPI docs are available at:
-
-```text
-http://localhost:8000/docs
-```
-
-## Frontend Routes
-
-- `/login`
-- `/dashboard`
-- `/salon-select`
-- `/admin/dashboard`
-- `/admin/users`
-- `/owner/dashboard`
-- `/owner/appointments`
-- `/owner/services`
-- `/owner/services/new`
-- `/reception/dashboard`
-- `/customers`
-- `/customers/:customerId`
-- `/analytics`
-- `/reports`
-
-Routes are protected with role checks and Supabase-backed authentication.
-
-## Prerequisites
-
-- Python 3.10+
-- Node.js 18+
-- PostgreSQL or Supabase PostgreSQL
-- Redis
-- A Groq API key for LLM-assisted chatbot behavior
-- Telegram bot credentials if Telegram is enabled
-- WhatsApp Business API credentials if WhatsApp is enabled
-
-## Backend Setup
-
-Create and configure the backend environment:
+Configure your environment variables:
 
 ```powershell
 cd backend
 copy .env.example .env
 ```
 
-Important backend variables:
+*Update `.env` with your `DATABASE_URL`, `REDIS_URL`, `SUPABASE_URL`, `GROQ_API_KEY`, and Webhook details.*
 
-```env
-DATABASE_URL=postgresql+asyncpg://...
-REDIS_URL=redis://localhost:6379/0
-SUPABASE_URL=https://your-project.supabase.co
-SUPABASE_SERVICE_ROLE_KEY=...
-SUPABASE_JWT_SECRET=...
-GROQ_API_KEY=...
-WEBHOOK_BASE_URL=https://your-public-webhook-url
-WHATSAPP_VERIFY_TOKEN=...
-WHATSAPP_ACCESS_TOKEN=...
-WHATSAPP_PHONE_NUMBER_ID=...
-TELEGRAM_BOT_NAME=...
-```
-
-Install Python dependencies:
+Create a virtual environment and install dependencies:
 
 ```powershell
-cd backend
 python -m venv venv
 .\venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-Apply database setup:
-
-- For a fresh Supabase project, use the scripts in `backend/sql/` and follow `backend/sql/README.md`.
-- For schema changes after the baseline, use Alembic from `backend/`.
+Run database migrations:
 
 ```powershell
-cd backend
 alembic upgrade head
 ```
 
-Start the backend:
+Start the API server:
 
 ```powershell
-cd backend
+# Standard start
 python -m app.run_api
+
+# Or use the provided script from root
+..\start_backend.bat
 ```
 
-Or from the repository root on Windows:
+*The API will be available at `http://localhost:8000/docs`.*
 
-```powershell
-.\start_backend.bat
-```
-
-The backend runs on `http://localhost:8000` by default.
-
-## Worker Setup
-
-Run background workers separately from the API:
+Start the Background Worker Pool (in a separate terminal):
 
 ```powershell
 cd backend
+.\venv\Scripts\activate
 python -m app.workers.run_pool
 ```
 
-The worker pool handles notification jobs and appointment lifecycle transitions.
+### 2. Frontend Setup
 
-## Frontend Setup
-
-Create and configure the frontend environment:
+Configure your environment variables:
 
 ```powershell
 cd frontend
 copy .env.example .env
 ```
 
-Important frontend variables:
+*Update `.env` with `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`, and `VITE_API_URL`.*
 
-```env
-VITE_SUPABASE_URL=https://your-project.supabase.co
-VITE_SUPABASE_ANON_KEY=...
-VITE_API_URL=http://localhost:8000
-```
-
-Install dependencies and run the dashboard:
+Install and start the dashboard:
 
 ```powershell
-cd frontend
 npm install
 npm run dev
 ```
 
-The frontend runs on `http://localhost:3000`.
+*The dashboard will be available at `http://localhost:3000`.*
 
-## Authentication And Roles
+---
 
-The frontend signs users in with Supabase Auth. The backend validates Bearer tokens through the Supabase admin client, then loads the matching dashboard user from the local `users` table.
+## 🔐 Authentication & Roles
 
-Supported roles:
+Authentication is backed by **Supabase Auth**.
 
-- `admin`: platform-level access, salon selection, user management, and admin dashboard routes.
-- `salon_owner`: access to salon dashboard, services, appointments, analytics, reports, and own salon data.
-- `reception`: access to reception workflows, appointment management, customer records, and permitted salon data.
+- `admin`: Full platform control. Can manage salons, users, and global settings.
+- `salon_owner`: Complete access to their specific salon's appointments, services, analytics, and staff.
+- `reception`: Access to daily appointment workflows, customer records, and front-desk management for assigned salons.
 
-## Chatbot Flow
+---
 
-The backend resolves the salon from the webhook URL slug, loads or creates the customer, restores conversation state from Redis, runs the flow engine, writes confirmed appointments to PostgreSQL, schedules notification jobs, and sends replies through the original messaging channel.
+## 🤖 Chatbot Architecture
 
-The booking flow covers:
+The backend handles natural conversation states efficiently:
+1. Validates webhook origin (WhatsApp/Telegram).
+2. Identifies user and loads conversational state from **Redis**.
+3. Evaluates intent using the **Groq LLM** combined with a deterministic state machine.
+4. Walks the user through the booking process (Language → Customer Details → Service → Date/Time → Confirmation).
+5. Persists the final appointment into **PostgreSQL** and schedules reminder jobs.
 
-1. Greeting and main menu
-2. Language selection
-3. Customer details
-4. Marriage type
-5. Service selection
-6. Sample image preference
-7. Appointment date
-8. Appointment time
-9. Contact details
-10. Confirmation
-11. Appointment creation
+---
 
-The management flow supports selecting existing appointments and handling appointment changes or cancellations.
+## 📜 License
 
-## Database Notes
-
-- `backend/sql/schema.sql` is the baseline schema reference.
-- `backend/sql/seed_demo.sql` contains demo data.
-- `backend/sql/verify_migration.sql` checks applied database objects.
-- Alembic manages future migrations from `backend/alembic/`.
-- Appointment datetimes are stored as `TIMESTAMPTZ` in UTC and rendered using salon timezones.
-- Conversation sessions live in Redis and expire according to `SESSION_TTL_SECONDS`.
-
-## Build And Test Commands
-
-Backend:
-
-```powershell
-cd backend
-python -m pytest
-```
-
-Frontend:
-
-```powershell
-cd frontend
-npm run build
-npm run lint
-```
-
-Production-style frontend serving is supported by building `frontend/dist`; when that folder exists, the FastAPI app serves the built SPA for non-API routes.
-
-## More Documentation
-
-- Backend details: `backend/README.md`
-- SQL setup: `backend/sql/README.md`
-- Alembic playbook: `backend/alembic/README.md`
-- Logging notes: `backend/docs/LOGGING.md`
-- Future database plan: `backend/docs/FUTURE_DB_PLAN.md`
+Distributed under the MIT License. See `LICENSE` for more information.
